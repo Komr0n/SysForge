@@ -3,49 +3,59 @@ import { Card, Badge } from '../../components/ui';
 import { useInterval } from '../../hooks/useInterval';
 import { useTauri } from '../../hooks/useTauri';
 
-interface SystemInfo {
+export interface SystemInfo {
   cpu_name: string;
   cpu_cores: number;
   cpu_usage: number;
-  total_memory: number;
-  used_memory: number;
-  total_swap: number;
-  used_swap: number;
+  total_memory_bytes: number;
+  used_memory_bytes: number;
+  total_swap_bytes: number;
+  used_swap_bytes: number;
   os_name: string;
   os_version: string;
   hostname: string;
   uptime: number;
-  disks: { name: string; mount: string; total: number; used: number }[];
+  disks: { name: string; mount: string; total_bytes: number; used_bytes: number }[];
   network_interfaces: string[];
 }
 
-function mockSystemInfo(): SystemInfo {
+export function mockSystemInfo(): SystemInfo {
+  const gb = 1024 * 1024 * 1024;
   return {
     cpu_name: '12th Gen Intel Core i7-12700H',
     cpu_cores: 14,
     cpu_usage: 20 + Math.random() * 50,
-    total_memory: 32 * 1024 * 1024 * 1024 / 1024, // kb-ish
-    used_memory: (14 + Math.random() * 8) * 1024 * 1024 * 1024 / 1024,
-    total_swap: 8 * 1024 * 1024 * 1024 / 1024,
-    used_swap: (Math.random() * 1) * 1024 * 1024 * 1024 / 1024,
+    total_memory_bytes: 32 * gb,
+    used_memory_bytes: Math.floor((14 + Math.random() * 8) * gb),
+    total_swap_bytes: 8 * gb,
+    used_swap_bytes: Math.floor((Math.random() * 2) * gb),
     os_name: navigator.platform.includes('Win') ? 'Windows' : navigator.platform.includes('Mac') ? 'macOS' : 'Linux',
     os_version: navigator.userAgent.split(') ')[1]?.split(' ')[0] ?? 'Unknown',
     hostname: 'MAIN-WORKSTATION',
     uptime: Math.floor(Date.now() / 1000) % 86400,
     disks: [
-      { name: 'C:', mount: 'C:\\', total: 512 * 1024 * 1024 * 1024 / 1024, used: (238 + Math.random() * 40) * 1024 * 1024 * 1024 / 1024 },
-      { name: 'D:', mount: 'D:\\', total: 1024 * 1024 * 1024 * 1024 / 1024, used: (400 + Math.random() * 80) * 1024 * 1024 * 1024 / 1024 },
+      { name: 'C:', mount: 'C:\\', total_bytes: 512 * gb, used_bytes: Math.floor((238 + Math.random() * 40) * gb) },
+      { name: 'D:', mount: 'D:\\', total_bytes: 1024 * gb, used_bytes: Math.floor((400 + Math.random() * 80) * gb) },
     ],
     network_interfaces: ['Ethernet', 'Wi-Fi', 'Loopback'],
   };
 }
 
-function formatBytes(kb: number): string {
-  const b = kb * 1024;
-  if (b >= 1024 ** 3) return `${(b / 1024 ** 3).toFixed(1)} GB`;
-  if (b >= 1024 ** 2) return `${(b / 1024 ** 2).toFixed(1)} MB`;
-  if (b >= 1024) return `${(b / 1024).toFixed(1)} KB`;
-  return `${b.toFixed(0)} B`;
+export function formatBytes(bytes: number): string {
+  if (bytes <= 0 || isNaN(bytes)) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(1024));
+  const idx = Math.min(i, units.length - 1);
+  return `${(bytes / Math.pow(1024, idx)).toFixed(1)} ${units[idx]}`;
+}
+
+// Sanity check: verify formatBytes(32 * 1024^3) returns "32.0 GB"
+if (import.meta.env?.DEV) {
+  const testBytes = 32 * 1024 * 1024 * 1024;
+  const formatted = formatBytes(testBytes);
+  if (!formatted.includes('GB')) {
+    console.error(`[Sanity Check Failed] formatBytes(${testBytes}) returned "${formatted}" instead of ~32 GB`);
+  }
 }
 
 function formatUptime(sec: number): string {
@@ -74,14 +84,14 @@ export default function SystemOverview() {
   };
 
   useEffect(() => { refresh(); }, [isAvailable]);
-  useInterval(refresh, 2000);
+  useInterval(refresh, 5000);
 
   if (!info) {
     return <div style={{ padding: 20, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 12 }}>LOADING SYSTEM INFO...</div>;
   }
 
-  const ramPct = (info.used_memory / info.total_memory) * 100;
-  const swapPct = info.total_swap > 0 ? (info.used_swap / info.total_swap) * 100 : 0;
+  const ramPct = (info.used_memory_bytes / info.total_memory_bytes) * 100;
+  const swapPct = info.total_swap_bytes > 0 ? (info.used_swap_bytes / info.total_swap_bytes) * 100 : 0;
 
   return (
     <div style={{ padding: 12, overflow: 'auto', height: '100%' }}>
@@ -115,7 +125,7 @@ export default function SystemOverview() {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>RAM</span>
             <span style={{ fontSize: 16, fontFamily: 'var(--font-mono)', color: ramPct > 85 ? 'var(--danger)' : 'var(--accent-secondary)' }}>
-              {formatBytes(info.used_memory)} / {formatBytes(info.total_memory)}
+              {formatBytes(info.used_memory_bytes)} / {formatBytes(info.total_memory_bytes)}
             </span>
           </div>
           <div style={{ height: 8, background: 'rgba(255,255,255,0.05)', borderRadius: 4, overflow: 'hidden', marginBottom: 12 }}>
@@ -125,7 +135,7 @@ export default function SystemOverview() {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>SWAP</span>
             <span style={{ fontSize: 14, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>
-              {formatBytes(info.used_swap)} / {formatBytes(info.total_swap)}
+              {formatBytes(info.used_swap_bytes)} / {formatBytes(info.total_swap_bytes)}
             </span>
           </div>
           <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>
@@ -155,10 +165,10 @@ export default function SystemOverview() {
           </div>
         </Card>
 
-        {/* Disks Card */}
+        {/* Storage Card */}
         <Card title="Storage">
           {info.disks.map((disk, i) => {
-            const pct = (disk.used / disk.total) * 100;
+            const pct = (disk.used_bytes / disk.total_bytes) * 100;
             return (
               <div key={i} style={{ marginBottom: 10 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -166,7 +176,7 @@ export default function SystemOverview() {
                     {disk.name} ({disk.mount})
                   </span>
                   <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: pct > 90 ? 'var(--danger)' : 'var(--text-muted)' }}>
-                    {formatBytes(disk.used)} / {formatBytes(disk.total)} ({pct.toFixed(0)}%)
+                    {formatBytes(disk.used_bytes)} / {formatBytes(disk.total_bytes)} ({pct.toFixed(0)}%)
                   </span>
                 </div>
                 <div style={{ height: 6, background: 'rgba(255,255,255,0.05)', borderRadius: 3, overflow: 'hidden' }}>

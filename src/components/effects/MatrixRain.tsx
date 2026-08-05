@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
+import { createThrottledLoop } from '../../hooks/useCanvasLoop';
 
 const COLUMN_WIDTH = 18;
 const FPS = 15;
@@ -131,17 +132,7 @@ export default function MatrixRain() {
 
     for (let i = 0; i < numCols; i++) columns.push(makeCol(i));
 
-    let frameId: number;
-    let lastTime = 0;
-    const frameInterval = 1000 / Math.min(fpsCap, FPS);
-
-    const draw = (time: number) => {
-      frameId = requestAnimationFrame(draw);
-
-      const delta = time - lastTime;
-      if (delta < frameInterval) return;
-      lastTime = time - (delta % frameInterval);
-
+    const draw = (_time: number) => {
       // Solid dark wash for clean trails (no distortion from over-blending)
       ctx.fillStyle = 'rgba(2, 4, 8, 0.13)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -152,7 +143,6 @@ export default function MatrixRain() {
       for (const col of columns) {
         col.y += col.speed;
 
-        // Reset column when fully off screen
         if (col.y - col.length * COLUMN_WIDTH > canvas.height) {
           const fresh = makeCol(Math.floor(col.x / COLUMN_WIDTH));
           col.y = -col.length * COLUMN_WIDTH * Math.random();
@@ -165,14 +155,12 @@ export default function MatrixRain() {
           const y = col.y - j * COLUMN_WIDTH;
           if (y < -COLUMN_WIDTH || y > canvas.height + COLUMN_WIDTH) continue;
 
-          // Randomly mutate characters for a "living" effect
           if (Math.random() < 0.02) {
             col.chars[j] = CHARS[Math.floor(Math.random() * CHARS.length)];
           }
 
           const ratio = 1 - j / col.length;
 
-          // Clear layering — head glows, then bright, then mid, then dim tail
           if (j === 0) {
             ctx.shadowColor = rgba(palette.bright, 0.8);
             ctx.shadowBlur = 10;
@@ -199,10 +187,10 @@ export default function MatrixRain() {
       ctx.shadowBlur = 0;
     };
 
-    frameId = requestAnimationFrame(draw);
+    const stopLoop = createThrottledLoop(draw, { fpsCap: Math.min(fpsCap, FPS) });
 
     return () => {
-      cancelAnimationFrame(frameId);
+      stopLoop();
       window.removeEventListener('resize', resize);
     };
   }, [matrixColor, fpsCap]);

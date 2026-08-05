@@ -1,35 +1,38 @@
+import React, { Suspense, lazy } from 'react';
 import { useSettingsStore, BackgroundType } from '../../store/settingsStore';
-import MatrixRain from './MatrixRain';
-import StarField from './StarField';
-import ParticleNetwork from './ParticleNetwork';
-import NebulaEffect from './NebulaEffect';
-import ElectricStorm from './ElectricStorm';
-import CircuitBoard from './CircuitBoard';
-import HexagonGrid from './HexagonGrid';
-import AuroraEffect from './AuroraEffect';
-import PlasmaEffect from './PlasmaEffect';
+
+// Code-split all heavy background effect components
+const MatrixRain = lazy(() => import('./MatrixRain'));
+const StarField = lazy(() => import('./StarField'));
+const ParticleNetwork = lazy(() => import('./ParticleNetwork'));
+const NebulaEffect = lazy(() => import('./NebulaEffect'));
+const ElectricStorm = lazy(() => import('./ElectricStorm'));
+const CircuitBoard = lazy(() => import('./CircuitBoard'));
+const HexagonGrid = lazy(() => import('./HexagonGrid'));
+const AuroraEffect = lazy(() => import('./AuroraEffect'));
+const PlasmaEffect = lazy(() => import('./PlasmaEffect'));
 
 const BG_LABELS: { value: BackgroundType; label: string }[] = [
+  { value: 'grid', label: 'Cyber Grid (Default)' },
   { value: 'matrix', label: 'Matrix Rain' },
   { value: 'particles', label: 'Particle Net' },
-  { value: 'stars', label: 'Star Field' },
-  { value: 'nebula', label: 'Nebula' },
-  { value: 'storm', label: 'Electric Storm' },
-  { value: 'circuit', label: 'Circuit' },
-  { value: 'hexagon', label: 'Hex Grid' },
-  { value: 'aurora', label: 'Aurora' },
-  { value: 'plasma', label: 'Plasma' },
-  { value: 'grid', label: 'Cyber Grid' },
-  { value: 'gradient', label: 'Gradient' },
-  { value: 'none', label: 'None' },
+  { value: 'none', label: 'Clean / None' },
+  { value: 'stars', label: 'Star Field (Exp)' },
+  { value: 'nebula', label: 'Nebula (Exp)' },
+  { value: 'storm', label: 'Electric Storm (Exp)' },
+  { value: 'circuit', label: 'Circuit (Exp)' },
+  { value: 'hexagon', label: 'Hex Grid (Exp)' },
+  { value: 'aurora', label: 'Aurora (Exp)' },
+  { value: 'plasma', label: 'Plasma (Exp)' },
+  { value: 'gradient', label: 'Gradient (Exp)' },
 ];
 
 export default function BackgroundEffects() {
   const background = useSettingsStore((s) => s.background);
   const lowPowerMode = useSettingsStore((s) => s.performance.lowPowerMode);
+  const reduceMotion = useSettingsStore((s) => s.performance.reduceMotion);
 
-  // In low-power mode, always fall back to a static gradient.
-  if (lowPowerMode) {
+  if (lowPowerMode || reduceMotion) {
     return (
       <div
         className="animated-gradient"
@@ -48,7 +51,7 @@ export default function BackgroundEffects() {
 
   return (
     <>
-      {/* Layer 1: Static gradient base (always present for depth) */}
+      {/* Layer 1: Static gradient base */}
       <div
         className="animated-gradient"
         style={{
@@ -62,36 +65,38 @@ export default function BackgroundEffects() {
         }}
       />
 
-      {/* Layer 2: chosen background effect */}
-      {background === 'grid' && (
-        <div
-          className="animated-grid"
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: '100%',
-            zIndex: 0,
-            pointerEvents: 'none',
-          }}
-        />
-      )}
+      {/* Layer 2: Chosen background effect with Suspense */}
+      <Suspense fallback={null}>
+        {background === 'grid' && (
+          <div
+            className="animated-grid"
+            style={{
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              width: '100%',
+              height: '100%',
+              zIndex: 0,
+              pointerEvents: 'none',
+            }}
+          />
+        )}
 
-      {background === 'matrix' && <MatrixRain />}
-      {background === 'stars' && <StarField />}
-      {background === 'particles' && <ParticleNetwork />}
-      {background === 'nebula' && <NebulaEffect />}
-      {background === 'storm' && <ElectricStorm />}
-      {background === 'circuit' && <CircuitBoard />}
-      {background === 'hexagon' && <HexagonGrid />}
-      {background === 'aurora' && <AuroraEffect />}
-      {background === 'plasma' && <PlasmaEffect />}
+        {background === 'matrix' && <MatrixRain />}
+        {background === 'stars' && <StarField />}
+        {background === 'particles' && <ParticleNetwork />}
+        {background === 'nebula' && <NebulaEffect />}
+        {background === 'storm' && <ElectricStorm />}
+        {background === 'circuit' && <CircuitBoard />}
+        {background === 'hexagon' && <HexagonGrid />}
+        {background === 'aurora' && <AuroraEffect />}
+        {background === 'plasma' && <PlasmaEffect />}
+      </Suspense>
 
-      {/* Scanline overlay for CRT feel */}
+      {/* CRT Scanline overlay */}
       <div className="scanline-overlay" />
 
-      {/* Vignette overlay for cinematic depth */}
+      {/* Vignette overlay */}
       <div
         style={{
           position: 'fixed',

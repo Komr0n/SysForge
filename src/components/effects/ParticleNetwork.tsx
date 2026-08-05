@@ -2,8 +2,9 @@ import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useSettingsStore } from '../../store/settingsStore';
 
-const MAX_PARTICLES = 150;
+const MAX_PARTICLES = 70;
 const CONNECTION_DISTANCE = 120;
+const MAX_CONNECTIONS = 400;
 const DRIFT_SPEED = 0.02;
 
 export default function ParticleNetwork() {
@@ -109,25 +110,48 @@ export default function ParticleNetwork() {
       }
       particleGeometry.attributes.position.needsUpdate = true;
 
-      // Recalculate connections every 3 frames
-      if (Math.floor(time / 16) % 3 === 0) {
+      // Recalculate connections on a throttled cadence using a spatial grid
+      if (Math.floor(time / 48) % 4 === 0) {
         const linePos = lineGeometry.attributes.position.array as Float32Array;
         let lineIndex = 0;
+        const grid = new Map<string, number[]>();
+        const cellSize = CONNECTION_DISTANCE;
 
         for (let i = 0; i < MAX_PARTICLES; i++) {
-          for (let j = i + 1; j < MAX_PARTICLES; j++) {
-            const dx = pos[i * 3] - pos[j * 3];
-            const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
-            const dist = Math.sqrt(dx * dx + dy * dy);
+          const cx = Math.floor(pos[i * 3] / cellSize);
+          const cy = Math.floor(pos[i * 3 + 1] / cellSize);
+          const key = `${cx},${cy}`;
+          const bucket = grid.get(key);
+          if (bucket) bucket.push(i);
+          else grid.set(key, [i]);
+        }
 
-            if (dist < CONNECTION_DISTANCE && lineIndex < linePos.length - 5) {
-              linePos[lineIndex * 3] = pos[i * 3];
-              linePos[lineIndex * 3 + 1] = pos[i * 3 + 1];
-              linePos[lineIndex * 3 + 2] = pos[i * 3 + 2];
-              linePos[lineIndex * 3 + 3] = pos[j * 3];
-              linePos[lineIndex * 3 + 4] = pos[j * 3 + 1];
-              linePos[lineIndex * 3 + 5] = pos[j * 3 + 2];
-              lineIndex++;
+        outer: for (let i = 0; i < MAX_PARTICLES; i++) {
+          const cx = Math.floor(pos[i * 3] / cellSize);
+          const cy = Math.floor(pos[i * 3 + 1] / cellSize);
+
+          for (let gx = cx - 1; gx <= cx + 1; gx++) {
+            for (let gy = cy - 1; gy <= cy + 1; gy++) {
+              const neighbors = grid.get(`${gx},${gy}`);
+              if (!neighbors) continue;
+
+              for (const j of neighbors) {
+                if (j <= i) continue;
+                const dx = pos[i * 3] - pos[j * 3];
+                const dy = pos[i * 3 + 1] - pos[j * 3 + 1];
+                const distSq = dx * dx + dy * dy;
+
+                if (distSq < CONNECTION_DISTANCE * CONNECTION_DISTANCE && lineIndex < MAX_CONNECTIONS) {
+                  linePos[lineIndex * 3] = pos[i * 3];
+                  linePos[lineIndex * 3 + 1] = pos[i * 3 + 1];
+                  linePos[lineIndex * 3 + 2] = pos[i * 3 + 2];
+                  linePos[lineIndex * 3 + 3] = pos[j * 3];
+                  linePos[lineIndex * 3 + 4] = pos[j * 3 + 1];
+                  linePos[lineIndex * 3 + 5] = pos[j * 3 + 2];
+                  lineIndex++;
+                  if (lineIndex >= MAX_CONNECTIONS) break outer;
+                }
+              }
             }
           }
         }

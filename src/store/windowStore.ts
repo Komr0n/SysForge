@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { ReactNode } from 'react';
+import { sfx } from '../lib/sfx';
 
 export interface WindowState {
   id: string;
@@ -33,6 +34,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   nextZIndex: 1,
 
   openWindow: (id, title, icon, component, defaultSize = { w: 800, h: 500 }, defaultPosition = { x: 100 + (get().windows.size * 30), y: 100 + (get().windows.size * 30) }) => {
+    sfx.playOpen();
     const { nextZIndex } = get();
     const newWindow: WindowState = {
       id,
@@ -53,6 +55,7 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
   },
 
   closeWindow: (id) => {
+    sfx.playClose();
     const newWindows = new Map(get().windows);
     newWindows.delete(id);
     set({ windows: newWindows });

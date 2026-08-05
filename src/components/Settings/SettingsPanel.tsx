@@ -2,28 +2,17 @@ import { useState } from 'react';
 import { X, Palette, Monitor, Cpu, Volume2, Key, LayoutGrid } from 'lucide-react';
 import { useSettingsStore, BackgroundType, ThemeMode, MatrixColor } from '../../store/settingsStore';
 import { BG_LABELS } from '../effects/BackgroundEffects';
-import { MATRIX_COLOR_OPTIONS } from '../effects/MatrixRain';
-import { THEME_OPTIONS } from './ThemeManager';
+import { MATRIX_COLOR_OPTIONS } from '../effects/matrixColors';
+import { PRIMARY_THEME_OPTIONS, EXPERIMENTAL_THEME_OPTIONS } from './ThemeManager';
 
 interface SettingsPanelProps {
   open: boolean;
   onClose: () => void;
 }
 
-const THEMES = THEME_OPTIONS;
-
 const FPS_OPTIONS = [24, 30, 60, 120];
 
-const WIDGET_OPTIONS: { key: 'clock' | 'systemVitals' | 'globe' | 'networkMonitor' | 'audioVisualizer' | 'miniTerminal' | 'cpuRamGraph' | 'activityHistory'; label: string }[] = [
-  { key: 'clock', label: 'Clock' },
-  { key: 'systemVitals', label: 'System Vitals' },
-  { key: 'globe', label: 'Globe (3D)' },
-  { key: 'networkMonitor', label: 'Network Monitor' },
-  { key: 'audioVisualizer', label: 'Audio Spectrum' },
-  { key: 'miniTerminal', label: 'Mini Terminal' },
-  { key: 'cpuRamGraph', label: 'CPU/RAM Graph' },
-  { key: 'activityHistory', label: 'Activity History' },
-];
+
 
 const MATRIX_COLOR_LABELS: Record<MatrixColor, string> = {
   green: 'Green',
@@ -58,10 +47,10 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
     setTheme,
     setBackground,
     setMatrixColor,
-    toggleGlobeWidget,
     toggleReduceMotion,
     toggleLowPowerMode,
     toggleAudio,
+    setVolume,
     setFpsCap,
     toggleWidget,
   } = useSettingsStore();
@@ -96,8 +85,8 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
         onClick={(e) => e.stopPropagation()}
         className="window-frame"
         style={{
-          width: 660,
-          height: 500,
+          width: 680,
+          height: 520,
           display: 'flex',
           flexDirection: 'row',
           padding: 0,
@@ -150,13 +139,13 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
           <div style={{ flex: 1, overflow: 'auto', padding: 16 }}>
             {section === 'appearance' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-                {/* Theme */}
+                {/* Main Presets */}
                 <div>
-                  <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>
-                    Theme
+                  <div style={{ fontSize: 10, color: 'var(--accent-primary)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, fontWeight: 700 }}>
+                    Primary Theme Presets
                   </div>
                   <div style={{ display: 'flex', gap: 10 }}>
-                    {THEMES.map((t) => (
+                    {PRIMARY_THEME_OPTIONS.map((t) => (
                       <div
                         key={t.value}
                         onClick={() => setTheme(t.value)}
@@ -174,8 +163,39 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                           transition: 'all 0.15s',
                         }}
                       >
-                        <div style={{ width: 40, height: 40, borderRadius: 6, background: t.preview, border: '1px solid var(--border-color)' }} />
-                        <span style={{ fontSize: 11, color: theme === t.value ? 'var(--accent-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                        <div style={{ width: 36, height: 36, borderRadius: 6, background: t.preview, border: '1px solid var(--border-color)' }} />
+                        <span style={{ fontSize: 11, color: theme === t.value ? 'var(--accent-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)', textAlign: 'center' }}>
+                          {t.label}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Experimental Themes */}
+                <div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>
+                    Experimental Themes
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
+                    {EXPERIMENTAL_THEME_OPTIONS.map((t) => (
+                      <div
+                        key={t.value}
+                        onClick={() => setTheme(t.value)}
+                        style={{
+                          padding: '8px 6px',
+                          borderRadius: 6,
+                          border: `1px solid ${theme === t.value ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                          background: theme === t.value ? 'rgba(0,255,136,0.08)' : 'rgba(2,6,23,0.6)',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          transition: 'all 0.15s',
+                        }}
+                      >
+                        <span style={{ width: 10, height: 10, borderRadius: '50%', background: t.preview, flexShrink: 0 }} />
+                        <span style={{ fontSize: 10, color: theme === t.value ? 'var(--accent-primary)' : 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
                           {t.label}
                         </span>
                       </div>
@@ -186,7 +206,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 {/* Background */}
                 <div>
                   <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8 }}>
-                    Background
+                    Background Effect
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 6 }}>
                     {BG_LABELS.map((bg) => (
@@ -260,22 +280,55 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             )}
 
             {section === 'widgets' && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: 1.5, textTransform: 'uppercase' }}>
-                  Desktop Widgets — toggle each widget on/off
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+
+                {/* Bottom Telemetry Bar */}
+                <div>
+                  <div style={{ fontSize: 9, color: 'var(--accent-primary)', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, fontWeight: 700 }}>
+                    Bottom Bar (Telemetry Bar)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {([
+                      { key: 'cpuRamGraph' as const, label: 'CPU/RAM Graph', desc: '60-second rolling performance chart' },
+                      { key: 'systemVitals' as const, label: 'System Vitals', desc: 'Concentric rings: CPU / RAM / Disk / FPS' },
+                      { key: 'miniTerminal' as const, label: 'Mini Terminal', desc: 'Interactive shell — type commands here' },
+                    ]).map((w) => (
+                      <ToggleRow key={w.key} label={w.label} desc={w.desc} value={widgets[w.key]} onChange={() => toggleWidget(w.key)} />
+                    ))}
+                  </div>
                 </div>
-                {WIDGET_OPTIONS.map((w) => (
-                  <ToggleRow
-                    key={w.key}
-                    label={w.label}
-                    desc={widgetDesc(w.key)}
-                    value={w.key === 'globe' ? performance.globeWidget : widgets[w.key]}
-                    onChange={() => {
-                      if (w.key === 'globe') toggleGlobeWidget();
-                      else toggleWidget(w.key);
-                    }}
-                  />
-                ))}
+
+                {/* Right Side Rail */}
+                <div>
+                  <div style={{ fontSize: 9, color: '#0ea5e9', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, fontWeight: 700 }}>
+                    Right Side Rail (Instruments)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {([
+                      { key: 'networkMonitor' as const, label: 'Network Monitor', desc: 'Live upload / download traffic graph' },
+                      { key: 'audioVisualizer' as const, label: 'Audio Spectrum', desc: 'Animated frequency-bar equalizer' },
+                      { key: 'activityHistory' as const, label: 'Activity History', desc: 'CPU usage by weekday or month' },
+                    ]).map((w) => (
+                      <ToggleRow key={w.key} label={w.label} desc={w.desc} value={widgets[w.key]} onChange={() => toggleWidget(w.key)} />
+                    ))}
+                  </div>
+                </div>
+
+                {/* Desktop Overlay */}
+                <div>
+                  <div style={{ fontSize: 9, color: '#f59e0b', letterSpacing: 1.5, textTransform: 'uppercase', marginBottom: 8, fontWeight: 700 }}>
+                    Desktop Overlay (Draggable)
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {([
+                      { key: 'clock' as const, label: 'Clock', desc: 'Large time/date display — drag anywhere' },
+                      { key: 'globe' as const, label: 'Globe (3D)', desc: 'Interactive 3D rotating globe — drag anywhere' },
+                    ]).map((w) => (
+                      <ToggleRow key={w.key} label={w.label} desc={w.desc} value={widgets[w.key]} onChange={() => toggleWidget(w.key)} />
+                    ))}
+                  </div>
+                </div>
+
               </div>
             )}
 
@@ -311,7 +364,23 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
             )}
 
             {section === 'audio' && (
-              <ToggleRow label="Audio Effects" desc="UI sound feedback" value={audio.enabled} onChange={toggleAudio} />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <ToggleRow label="Audio Effects" desc="Tactile WebAudio sound feedback" value={audio.enabled} onChange={toggleAudio} />
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>
+                    Master Volume ({Math.round((audio.volume ?? 0.5) * 100)}%)
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={audio.volume ?? 0.5}
+                    onChange={(e) => setVolume(parseFloat(e.target.value))}
+                    style={{ width: '100%', accentColor: 'var(--accent-primary)' }}
+                  />
+                </div>
+              </div>
             )}
 
             {section === 'apikeys' && (
@@ -320,7 +389,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                 <ApiKeyInput service="virustotal" label="VirusTotal" />
                 <ApiKeyInput service="nvd" label="NVD (CVE)" />
                 <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 8 }}>
-                  Keys are stored locally in memory only (not persisted yet).
+                  Note: API keys are stored in-memory during session (not written unencrypted to disk).
                 </div>
               </div>
             )}
@@ -331,19 +400,7 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
   );
 }
 
-function widgetDesc(key: string): string {
-  const descs: Record<string, string> = {
-    clock: 'Large time/date display',
-    systemVitals: 'CPU / RAM / Disk / FPS rings',
-    globe: '3D interactive globe widget',
-    networkMonitor: 'Live traffic graph',
-    audioVisualizer: 'Frequency spectrum bars',
-    miniTerminal: 'Animated terminal feed',
-    cpuRamGraph: '60-second performance graph',
-    activityHistory: 'Usage by day / month',
-  };
-  return descs[key] ?? '';
-}
+
 
 function ToggleRow({ label, desc, value, onChange }: { label: string; desc: string; value: boolean; onChange: () => void }) {
   return (

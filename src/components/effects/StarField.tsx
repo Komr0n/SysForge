@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { createThrottledLoop } from '../../hooks/useCanvasLoop';
 
 interface Star {
   x: number;
@@ -60,17 +61,7 @@ export default function StarField() {
     };
     window.addEventListener('mousemove', handleMouseMove);
 
-    let frameId: number;
-    let lastTime = 0;
-    const frameInterval = 1000 / 30;
-
-    const draw = (time: number) => {
-      frameId = requestAnimationFrame(draw);
-
-      const delta = time - lastTime;
-      if (delta < frameInterval) return;
-      lastTime = time - (delta % frameInterval);
-
+    const draw = () => {
       ctx.fillStyle = 'rgba(5, 10, 20, 0.3)';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -95,7 +86,6 @@ export default function StarField() {
         const size = star.size * (1 - star.z / MAX_DEPTH);
         const opacity = Math.pow(1 - star.z / MAX_DEPTH, 1.5);
 
-        // Tail — longer and more visible
         const prevK = 128 / (star.z + star.speed * 6);
         const prevPx = star.x * prevK + centerX;
         const prevPy = star.y * prevK + centerY;
@@ -111,13 +101,11 @@ export default function StarField() {
         ctx.lineTo(px, py);
         ctx.stroke();
 
-        // Head glow
         if (opacity > 0.4) {
           ctx.shadowColor = `rgba(${star.color}, ${opacity * 0.6})`;
           ctx.shadowBlur = 4;
         }
 
-        // Head
         ctx.fillStyle = `rgba(${star.color}, ${opacity})`;
         ctx.beginPath();
         ctx.arc(px, py, size, 0, Math.PI * 2);
@@ -126,7 +114,6 @@ export default function StarField() {
         ctx.shadowBlur = 0;
       }
 
-      // Occasional bright flash streak
       if (Math.random() < 0.003) {
         const fx = Math.random() * canvas.width;
         const fy = Math.random() * canvas.height;
@@ -150,10 +137,10 @@ export default function StarField() {
       }
     };
 
-    frameId = requestAnimationFrame(draw);
+    const stopLoop = createThrottledLoop(() => draw(), { fpsCap: 30 });
 
     return () => {
-      cancelAnimationFrame(frameId);
+      stopLoop();
       window.removeEventListener('resize', resize);
       window.removeEventListener('mousemove', handleMouseMove);
     };

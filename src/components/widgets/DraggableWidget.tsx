@@ -1,22 +1,19 @@
 import { Rnd } from 'react-rnd';
-import { useRef, useCallback } from 'react';
+import { useCallback, useMemo } from 'react';
+import { useSettingsStore } from '../../store/settingsStore';
 
 /**
  * DraggableWidget — wraps any widget so it can be dragged around the workspace.
- * Uses react-rnd (same library as windows) but styled as a compact widget.
- * Provides a small drag handle (the title bar at the top) so users can move it.
+ * Position is persisted in settingsStore.widgetPositions.
  */
 
 interface DraggableWidgetProps {
-  /** Stable id for this widget instance */
   id: string;
-  /** Initial position */
   initialX?: number;
   initialY?: number;
-  /** Widget width — defaults to 280 */
+  /** Place widget in a corner when no saved position exists */
+  anchor?: 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left';
   width?: number;
-  /** Optional title shown in the drag handle. If omitted, no handle bar is rendered
-   *  and the whole widget body becomes the drag surface. */
   title?: string;
   children: React.ReactNode;
 }
@@ -25,22 +22,45 @@ export default function DraggableWidget({
   id,
   initialX = 16,
   initialY = 16,
+  anchor,
   width = 280,
   title,
   children,
 }: DraggableWidgetProps) {
-  // Track position via a ref so re-renders of the parent don't reset position
-  const posRef = useRef({ x: initialX, y: initialY });
+  const savedPos = useSettingsStore((s) => s.widgetPositions[id]);
+  const setWidgetPosition = useSettingsStore((s) => s.setWidgetPosition);
 
-  const handleDragStop = useCallback((_e: any, d: { x: number; y: number }) => {
-    posRef.current = { x: d.x, y: d.y };
-  }, []);
+  const resolveDefault = useMemo(() => {
+    const parent = document.querySelector('[data-workspace]') as HTMLElement | null;
+    const pw = parent?.clientWidth ?? window.innerWidth;
+    const ph = parent?.clientHeight ?? window.innerHeight;
+    const margin = 16;
+
+    switch (anchor) {
+      case 'top-right':
+        return { x: pw - width - margin, y: margin };
+      case 'bottom-right':
+        return { x: pw - width - margin, y: ph - 340 - margin };
+      case 'bottom-left':
+        return { x: margin, y: ph - 340 - margin };
+      default:
+        return { x: initialX, y: initialY };
+    }
+  }, [anchor, initialX, initialY, width]);
+
+  const position = savedPos ?? resolveDefault;
+
+  const handleDragStop = useCallback(
+    (_e: unknown, d: { x: number; y: number }) => {
+      setWidgetPosition(id, { x: d.x, y: d.y });
+    },
+    [id, setWidgetPosition]
+  );
 
   return (
     <Rnd
-      key={id}
       size={{ width, height: 'auto' }}
-      position={posRef.current}
+      position={position}
       onDragStop={handleDragStop}
       bounds="parent"
       enableResizing={false}

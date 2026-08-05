@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { useSettingsStore } from '../../store/settingsStore';
+import { createThrottledLoop } from '../../hooks/useCanvasLoop';
 
 interface GlobeWidgetProps {
   style?: React.CSSProperties;
@@ -8,101 +9,11 @@ interface GlobeWidgetProps {
 
 export default function GlobeWidget({ style }: GlobeWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const enabled = useSettingsStore((s) => s.widgets.globe);
   const fpsCap = useSettingsStore((s) => s.performance.fpsCap);
-
-  const animateRef = useRef<ReturnType<typeof animateLoop> | null>(null);
-
-  const animateLoop = useCallback(
-    (
-      renderer: THREE.WebGLRenderer,
-      scene: THREE.Scene,
-      camera: THREE.PerspectiveCamera,
-      sphere: THREE.Mesh,
-      latLines: THREE.Line[],
-      lngLines: THREE.Line[],
-      orbitDots: { mesh: THREE.Mesh; speed: number; tilt: number; phase: number }[],
-      atmosphere: THREE.Mesh,
-      glowLines: THREE.Line[],
-      rotationRef: { x: number; y: number },
-      mouseRef: { isDown: boolean; lastX: number; lastY: number },
-      velocityRef: { vx: number; vy: number },
-      frameInterval: number
-    ) => {
-      let frameId: number;
-      let lastTime = 0;
-
-      const animate = (time: number) => {
-        frameId = requestAnimationFrame(animate);
-
-        const delta = time - lastTime;
-        if (delta < frameInterval) return;
-        lastTime = time - (delta % frameInterval);
-
-        // Apply mouse velocity with damping
-        rotationRef.y += velocityRef.vx;
-        rotationRef.x += velocityRef.vy;
-
-        // Dampen velocity
-        velocityRef.vx *= 0.95;
-        velocityRef.vy *= 0.95;
-
-        // Auto-rotate slowly when not interacting
-        if (Math.abs(velocityRef.vx) < 0.0003 && Math.abs(velocityRef.vy) < 0.0003) {
-          rotationRef.y += 0.003;
-        }
-
-        // Clamp vertical rotation
-        rotationRef.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, rotationRef.x));
-
-        // Apply rotations
-        sphere.rotation.y = rotationRef.y;
-        sphere.rotation.x = rotationRef.x;
-        for (const line of latLines) {
-          line.rotation.y = rotationRef.y;
-          line.rotation.x = rotationRef.x;
-        }
-        for (const line of lngLines) {
-          line.rotation.y = rotationRef.y;
-          line.rotation.x = rotationRef.x;
-        }
-        atmosphere.rotation.y = rotationRef.y;
-        atmosphere.rotation.x = rotationRef.x;
-        for (const glowLine of glowLines) {
-          glowLine.rotation.y = rotationRef.y;
-          glowLine.rotation.x = rotationRef.x;
-        }
-
-        // Update orbiting signal dots
-        for (const dot of orbitDots) {
-          const angle = time * 0.001 * dot.speed + dot.phase;
-          const radius = 1.35;
-
-          // Calculate position on a tilted orbit
-          const cosT = Math.cos(dot.tilt);
-          const sinT = Math.sin(dot.tilt);
-          const localX = Math.cos(angle) * radius;
-          const localY = Math.sin(angle) * radius * sinT;
-          const localZ = Math.sin(angle) * radius * cosT;
-
-          dot.mesh.position.set(localX, localY, localZ);
-
-          // Pulse glow
-          const pulse = 0.6 + 0.4 * Math.sin(time * 0.003 + dot.phase);
-          (dot.mesh.material as THREE.MeshBasicMaterial).opacity = pulse;
-        }
-
-        renderer.render(scene, camera);
-      };
-
-      frameId = requestAnimationFrame(animate);
-      return () => cancelAnimationFrame(frameId);
-    },
-    []
-  );
+  const reduceMotion = useSettingsStore((s) => s.performance.reduceMotion);
 
   useEffect(() => {
-    if (!enabled || !containerRef.current) return;
+    if (reduceMotion || !containerRef.current) return;
 
     const container = containerRef.current;
     const width = 300;
@@ -331,29 +242,59 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
     canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
     canvas.addEventListener('touchend', handleTouchEnd);
 
-    const frameInterval = 1000 / fpsCap;
-    const cancel = animateLoop(
-      renderer, scene, camera, sphere, latLines, lngLines, orbitDots,
-      atmosphere, glowLines, rotationRef, mouseRef, velocityRef, frameInterval
-    );
-    animateRef.current = cancel;
-
-    // Handle visibility
-    const handleVisibility = () => {
-      if (document.hidden) {
-        cancel();
-      } else {
-        animateRef.current = animateLoop(
-          renderer, scene, camera, sphere, latLines, lngLines, orbitDots,
-          atmosphere, glowLines, rotationRef, mouseRef, velocityRef, frameInterval
-        );
+    const applyRotation = () => {
+      sphere.rotation.y = rotationRef.y;
+      sphere.rotation.x = rotationRef.x;
+      for (const line of latLines) {
+        line.rotation.y = rotationRef.y;
+        line.rotation.x = rotationRef.x;
+      }
+      for (const line of lngLines) {
+        line.rotation.y = rotationRef.y;
+        line.rotation.x = rotationRef.x;
+      }
+      atmosphere.rotation.y = rotationRef.y;
+      atmosphere.rotation.x = rotationRef.x;
+      for (const glowLine of glowLines) {
+        glowLine.rotation.y = rotationRef.y;
+        glowLine.rotation.x = rotationRef.x;
       }
     };
-    document.addEventListener('visibilitychange', handleVisibility);
+
+    const stopLoop = createThrottledLoop(
+      (time) => {
+        rotationRef.y += velocityRef.vx;
+        rotationRef.x += velocityRef.vy;
+        velocityRef.vx *= 0.95;
+        velocityRef.vy *= 0.95;
+
+        if (Math.abs(velocityRef.vx) < 0.0003 && Math.abs(velocityRef.vy) < 0.0003) {
+          rotationRef.y += 0.003;
+        }
+        rotationRef.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, rotationRef.x));
+        applyRotation();
+
+        for (const dot of orbitDots) {
+          const angle = time * 0.001 * dot.speed + dot.phase;
+          const radius = 1.35;
+          const cosT = Math.cos(dot.tilt);
+          const sinT = Math.sin(dot.tilt);
+          dot.mesh.position.set(
+            Math.cos(angle) * radius,
+            Math.sin(angle) * radius * sinT,
+            Math.sin(angle) * radius * cosT
+          );
+          const pulse = 0.6 + 0.4 * Math.sin(time * 0.003 + dot.phase);
+          (dot.mesh.material as THREE.MeshBasicMaterial).opacity = pulse;
+        }
+
+        renderer.render(scene, camera);
+      },
+      { fpsCap }
+    );
 
     return () => {
-      cancel();
-      document.removeEventListener('visibilitychange', handleVisibility);
+      stopLoop();
       canvas.removeEventListener('mousedown', handleMouseDown);
       canvas.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
@@ -371,9 +312,15 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, [enabled, fpsCap, animateLoop]);
+  }, [fpsCap, reduceMotion]);
 
-  if (!enabled) return null;
+  if (reduceMotion) {
+    return (
+      <div style={{ width: 300, height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, color: '#64748b' }}>
+        GLOBE (REDUCED MOTION)
+      </div>
+    );
+  }
 
   return (
     <div

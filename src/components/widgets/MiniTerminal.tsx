@@ -1,143 +1,195 @@
-import { useEffect, useState, useRef } from 'react';
+import { useState, useRef, useEffect, KeyboardEvent } from 'react';
+import { useTauri } from '../../hooks/useTauri';
 
-/**
- * MiniTerminal — cinematic typing terminal widget.
- * Cycles through sysadmin-style command sequences with typewriter effect.
- */
-
-interface Line {
-  type: 'cmd' | 'out' | 'ok' | 'warn';
+interface LogLine {
+  id: string;
+  type: 'cmd' | 'output' | 'error' | 'info';
   text: string;
 }
 
-const SEQUENCES: Line[][] = [
-  [
-    { type: 'cmd', text: '$ nmap -sV 10.0.0.0/24' },
-    { type: 'out', text: 'Starting Nmap 7.94 ( https://nmap.org )' },
-    { type: 'out', text: 'Discovered 14 hosts on subnet' },
-    { type: 'ok', text: '10.0.0.1    22/tcp   open  ssh     OpenSSH 9.0' },
-    { type: 'ok', text: '10.0.0.5    80/tcp   open  http    nginx 1.25' },
-    { type: 'ok', text: '10.0.0.5    443/tcp  open  https   nginx 1.25' },
-    { type: 'warn', text: '10.0.0.12   3389/tcp open  ms-wbt  risky' },
-    { type: 'out', text: 'Scan done: 14 hosts in 4.21s' },
-  ],
-  [
-    { type: 'cmd', text: '$ ssh admin@prod-server-01' },
-    { type: 'out', text: 'Welcome to Ubuntu 22.04.3 LTS' },
-    { type: 'ok', text: '● System load:   0.23 0.18 0.15' },
-    { type: 'ok', text: '● Memory:        4.2G / 32G' },
-    { type: 'ok', text: '● Disk usage:    41% / 512G' },
-    { type: 'warn', text: '● Updates:       12 pending' },
-    { type: 'out', text: 'Last login: 14:32 from 10.0.0.42' },
-  ],
-  [
-    { type: 'cmd', text: '$ docker ps --format "{{.Names}}"' },
-    { type: 'ok', text: 'nginx-proxy     running   ↑ 32d' },
-    { type: 'ok', text: 'postgres-db     running   ↑ 18d' },
-    { type: 'ok', text: 'redis-cache     running   ↑ 18d' },
-    { type: 'warn', text: 'auth-service    restart   ✗' },
-    { type: 'out', text: '4 containers, 3 healthy' },
-  ],
-  [
-    { type: 'cmd', text: '$ tail -f /var/log/auth.log' },
-    { type: 'ok', text: 'accepted password for root from 10.0.0.5' },
-    { type: 'warn', text: 'failed password from 185.x.x.x port 22' },
-    { type: 'warn', text: 'failed password from 185.x.x.x port 22' },
-    { type: 'ok', text: 'blocked: 185.x.x.x after 5 attempts' },
-    { type: 'out', text: 'monitoring active...' },
-  ],
-];
-
-const COLORS: Record<Line['type'], string> = {
-  cmd: '#00ff88',
-  out: '#94a3b8',
-  ok: '#22d3ee',
-  warn: '#f59e0b',
-};
-
-const W = 280;
-
 export default function MiniTerminal() {
-  const [lines, setLines] = useState<Line[]>([]);
-  const [currentText, setCurrentText] = useState('');
-  const seqIdxRef = useRef(0);
-  const lineIdxRef = useRef(0);
-  const charIdxRef = useRef(0);
+  const { invoke, isAvailable } = useTauri();
+  const [history, setHistory] = useState<LogLine[]>([
+    { id: '1', type: 'info', text: 'SysForge Terminal v1.0 — type "help" for commands' },
+  ]);
+  const [inputVal, setInputVal] = useState('');
+  const [cmdHistory, setCmdHistory] = useState<string[]>([]);
+  const [historyIdx, setHistoryIdx] = useState<number>(-1);
+  const [isExec, setIsExec] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    const tick = async () => {
-      while (!cancelled) {
-        const seq = SEQUENCES[seqIdxRef.current];
-        if (lineIdxRef.current >= seq.length) {
-          // Sequence done — pause, then reset
-          await wait(2200);
-          if (cancelled) return;
-          seqIdxRef.current = (seqIdxRef.current + 1) % SEQUENCES.length;
-          lineIdxRef.current = 0;
-          setLines([]);
-          continue;
-        }
-
-        const line = seq[lineIdxRef.current];
-
-        // Type out the line character-by-character
-        for (charIdxRef.current = 0; charIdxRef.current <= line.text.length; charIdxRef.current++) {
-          if (cancelled) return;
-          setCurrentText(line.text.slice(0, charIdxRef.current));
-          // Faster for output, slower for commands
-          await wait(line.type === 'cmd' ? 35 : 12);
-        }
-
-        // Commit the line
-        setLines((prev) => [...prev, line]);
-        setCurrentText('');
-        lineIdxRef.current++;
-        await wait(line.type === 'cmd' ? 400 : 150);
-      }
-    };
-
-    tick();
-    return () => { cancelled = true; };
-  }, []);
-
-  // Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [lines, currentText]);
+  }, [history, isExec]);
 
-  const currentLine = SEQUENCES[seqIdxRef.current][lineIdxRef.current];
+  const handleKeyDown = async (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (cmdHistory.length > 0) {
+        const nextIdx = historyIdx < cmdHistory.length - 1 ? historyIdx + 1 : historyIdx;
+        setHistoryIdx(nextIdx);
+        setInputVal(cmdHistory[cmdHistory.length - 1 - nextIdx] || '');
+      }
+      return;
+    }
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyIdx > 0) {
+        const nextIdx = historyIdx - 1;
+        setHistoryIdx(nextIdx);
+        setInputVal(cmdHistory[cmdHistory.length - 1 - nextIdx] || '');
+      } else if (historyIdx === 0) {
+        setHistoryIdx(-1);
+        setInputVal('');
+      }
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      const command = inputVal.trim();
+      if (!command) return;
+
+      setInputVal('');
+      setHistoryIdx(-1);
+      setCmdHistory((prev) => [...prev, command]);
+
+      if (command.toLowerCase() === 'cls' || command.toLowerCase() === 'clear') {
+        setHistory([]);
+        return;
+      }
+
+      setHistory((prev) => [...prev, { id: String(Date.now()), type: 'cmd', text: `$ ${command}` }]);
+      setIsExec(true);
+
+      if (isAvailable) {
+        try {
+          const res = await invoke<string>('run_terminal_command', { command });
+          setHistory((prev) => [...prev, { id: String(Date.now() + 1), type: 'output', text: res || '(empty output)' }]);
+        } catch (err) {
+          setHistory((prev) => [...prev, { id: String(Date.now() + 1), type: 'error', text: String(err) }]);
+        }
+      } else {
+        await new Promise((r) => setTimeout(r, 200));
+        const mockResp = getMockResponse(command);
+        setHistory((prev) => [...prev, { id: String(Date.now() + 1), type: mockResp.type, text: mockResp.text }]);
+      }
+
+      setIsExec(false);
+    }
+  };
+
+  function getMockResponse(cmd: string): { type: 'output' | 'error'; text: string } {
+    const parts = cmd.toLowerCase().split(' ');
+    switch (parts[0]) {
+      case 'help':
+        return { type: 'output', text: 'Commands: ping, tracert, nslookup, netstat, ipconfig, whoami, uptime, echo, cls, help' };
+      case 'whoami':
+        return { type: 'output', text: 'sysforge\\administrator' };
+      case 'uptime':
+        return { type: 'output', text: 'Uptime: 4d 12h 34m 22s' };
+      case 'ping':
+        return { type: 'output', text: `Pinging ${parts[1] || 'localhost'} [127.0.0.1]:\nReply: bytes=32 time<1ms TTL=128\nReply: bytes=32 time<1ms TTL=128\nLost = 0 (0% loss)` };
+      case 'echo':
+        return { type: 'output', text: parts.slice(1).join(' ') || '' };
+      case 'ipconfig':
+        return { type: 'output', text: 'IPv4: 192.168.1.100  Mask: 255.255.255.0\nGateway: 192.168.1.1  DNS: 8.8.8.8' };
+      case 'netstat':
+        return { type: 'output', text: 'Proto  Local          Foreign        State\nTCP    0.0.0.0:80     *:*            LISTENING\nTCP    0.0.0.0:443    *:*            LISTENING' };
+      default:
+        return { type: 'error', text: `'${parts[0]}': command not found. Type 'help'.` };
+    }
+  }
 
   return (
-    <div style={{ width: W, overflow: 'hidden' }}>
-      {/* Terminal body */}
-      <div ref={scrollRef} style={{
-        padding: 10,
-        height: 180,
-        overflow: 'hidden',
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100%',
+        width: '100%',
+        background: '#030608',
+        color: '#e2e8f0',
         fontFamily: 'var(--font-mono)',
-        fontSize: 11,
-        lineHeight: 1.6,
+        fontSize: 10.5,
+        overflow: 'hidden',
+      }}
+      onClick={() => inputRef.current?.focus()}
+    >
+      {/* Title bar */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '3px 8px',
+        borderBottom: '1px solid rgba(255,255,255,0.06)',
+        background: 'rgba(0,0,0,0.4)',
+        flexShrink: 0,
       }}>
-        {lines.map((l, i) => (
-          <div key={i} style={{ color: COLORS[l.type], whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {l.text}
+        <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: 1.5 }}>TERMINAL</span>
+        <span style={{ fontSize: 9, color: isAvailable ? 'var(--accent-primary)' : '#f59e0b' }}>
+          {isAvailable ? '● LIVE' : '● MOCK'}
+        </span>
+      </div>
+
+      {/* Output scroll area */}
+      <div ref={scrollRef} style={{ flex: 1, overflowY: 'auto', padding: '4px 8px', lineHeight: 1.55 }}>
+        {history.map((h) => (
+          <div
+            key={h.id}
+            style={{
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-all',
+              color:
+                h.type === 'cmd' ? 'var(--accent-primary)'
+                : h.type === 'error' ? '#ef4444'
+                : h.type === 'info' ? '#0ea5e9'
+                : 'var(--text-primary)',
+              marginBottom: 1,
+            }}
+          >
+            {h.text}
           </div>
         ))}
-        {currentText !== '' && (
-          <div style={{ color: COLORS[currentLine.type], whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
-            {currentText}<span className="animate-pulse" style={{ opacity: 0.7 }}>▊</span>
-          </div>
-        )}
+        {isExec && <div style={{ color: '#f59e0b' }}>running...</div>}
+      </div>
+
+      {/* Input row */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '3px 8px 4px',
+        borderTop: '1px solid rgba(255,255,255,0.06)',
+        background: 'rgba(0,0,0,0.3)',
+        flexShrink: 0,
+      }}>
+        <span style={{ color: 'var(--accent-primary)', fontWeight: 700, flexShrink: 0 }}>$</span>
+        <input
+          ref={inputRef}
+          type="text"
+          value={inputVal}
+          onChange={(e) => setInputVal(e.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isExec}
+          style={{
+            flex: 1,
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            color: 'var(--text-primary)',
+            fontFamily: 'var(--font-mono)',
+            fontSize: 10.5,
+            caretColor: 'var(--accent-primary)',
+          }}
+          placeholder="type command..."
+          autoFocus
+          spellCheck={false}
+          autoComplete="off"
+        />
       </div>
     </div>
   );
-}
-
-function wait(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }

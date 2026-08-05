@@ -62,14 +62,11 @@ export default function ActivityHistory() {
 
     let frameId: number;
     let animProgress = 0;
+    let animating = true;
 
-    const draw = () => {
-      frameId = requestAnimationFrame(draw);
-      if (animProgress < 1) animProgress = Math.min(1, animProgress + 0.05);
-
+    const render = () => {
       ctx.clearRect(0, 0, W, H);
 
-      // Chart area
       const chartLeft = 30;
       const chartRight = W - 8;
       const chartTop = 8;
@@ -77,7 +74,6 @@ export default function ActivityHistory() {
       const chartW = chartRight - chartLeft;
       const chartH = chartBottom - chartTop;
 
-      // Y-axis grid lines + labels (0%, 25%, 50%, 75%, 100%)
       ctx.strokeStyle = 'rgba(30, 41, 59, 0.7)';
       ctx.fillStyle = '#475569';
       ctx.font = '8px "JetBrains Mono", monospace';
@@ -93,7 +89,6 @@ export default function ActivityHistory() {
         ctx.fillText(`${val}`, chartLeft - 4, y + 3);
       }
 
-      // Bars
       const barCount = data.length;
       const barSpace = chartW / barCount;
       const barW = barSpace * 0.55;
@@ -109,7 +104,6 @@ export default function ActivityHistory() {
           (mode === 'month' && i === new Date().getMonth());
         const isHover = i === hovered;
 
-        // Bar gradient
         const grad = ctx.createLinearGradient(0, chartTop, 0, chartBottom);
         if (isSel) {
           grad.addColorStop(0, '#00ff88');
@@ -127,7 +121,6 @@ export default function ActivityHistory() {
         ctx.fillStyle = grad;
         ctx.fillRect(x, y, barW, fullH);
 
-        // Outline on selected
         if (isSel) {
           ctx.shadowColor = '#00ff88';
           ctx.shadowBlur = 10;
@@ -138,7 +131,6 @@ export default function ActivityHistory() {
           ctx.strokeRect(x - 0.5, y - 0.5, barW + 1, fullH + 1);
         }
 
-        // X-axis labels
         ctx.fillStyle = isSel ? '#00ff88' : isToday ? '#facc15' : '#64748b';
         ctx.font = `${isSel ? 'bold ' : ''}9px "JetBrains Mono", monospace`;
         ctx.textAlign = 'center';
@@ -146,6 +138,17 @@ export default function ActivityHistory() {
       }
 
       ctx.textAlign = 'left';
+    };
+
+    const draw = () => {
+      if (animating) {
+        animProgress = Math.min(1, animProgress + 0.05);
+        if (animProgress >= 1) animating = false;
+      }
+      render();
+      if (animating) {
+        frameId = requestAnimationFrame(draw);
+      }
     };
 
     frameId = requestAnimationFrame(draw);
@@ -199,7 +202,7 @@ export default function ActivityHistory() {
   const maxLabel = labels[data.indexOf(max)];
 
   return (
-    <div style={{ width: 280, padding: 12 }}>
+    <div style={{ width: '100%', padding: 10, boxSizing: 'border-box' }}>
       {/* Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
         <span style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-primary)', fontWeight: 600 }}>

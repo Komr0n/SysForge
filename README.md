@@ -1,349 +1,163 @@
-# SysForge — Sysadmin Toolkit OS
+# SysForge — Sysadmin & Developer Toolkit OS
 
-> Десктопная «ОС»-оболочка для системных администраторов и разработчиков: бут-экран, рабочий стол с окнами, сайдбар с мини-программами, фоновыми эффектами и виджетами. Построена на **React + TypeScript + Vite + Tauri**.
+> Десктопная eDEX-UI «ОС»-оболочка для системных администраторов, DevOps и разработчиков: хардкорный HUD-интерфейс, анимированный бут-экран, 24 полнофункциональные мини-программы, фоновые Canvas-эффекты, телеметрия в реальном времени и встроенный терминал. Построена на **React 18 + TypeScript + Vite 5 + Tauri 2 (Rust)**.
 
 ---
 
-## Содержание
+## 📋 Содержание
 
 - [Обзор](#обзор)
-- [Возможности](#возможности)
+- [Выполненные возможности (Фазы 0–2)](#выполненные-возможности-фазы-02)
+- [Мини-программы (24/24)](#мини-программы-2424)
+- [Архитектура и безопасность (Rust Async)](#архитектура-и-безопасность-rust-async)
 - [Технологии](#технологии)
-- [Структура проекта](#структура-проекта)
 - [Установка и запуск](#установка-и-запуск)
-- [Скрипты](#скрипты)
-- [Мини-программы](#мини-программы)
-- [Виджеты и фон](#виджеты-и-фон)
-- [Настройки](#настройки)
-- [Архитектура](#архитектура)
-- [Скриншоты концепта](#скриншоты-концепта)
+- [🤖 Планируемый ИИ-помощник «Джарвис» (Фаза 3)](#-планируемый-ии-помощник-джарвис-фаза-3)
 - [Лицензия](#лицензия)
 
 ---
 
-## Обзор
+## 🔍 Обзор
 
-**SysForge** имитирует интерфейс киберпанк-операционной системы внутри одного веб-приложения (или десктоп-окна через Tauri). После анимированного бут-экрана пользователь попадает на рабочий стол:
+**SysForge** — это профессиональный десктопный HUD-инструментарий в стиле eDEX-UI. Интерфейс организует рабочее пространство системного администратора в единый экран:
 
-- **Header** сверху — логотип, часы, кнопка Settings.
-- **Sidebar** слева — категории (Network / Security / System / Developer) и список мини-программ.
-- **Workspace** — рабочая область с перетаскиваемыми окнами, фоновыми эффектами и ambient-виджетами (часы, системные виталы, 3D-глобус).
-- **Taskbar** снизу — список открытых и свёрнутых окон, системный трей с часами.
-
-Каждая мини-программа открывается в собственном окне (`WindowFrame`), которое можно двигать, ресайзить, сворачивать, разворачивать и закрывать.
-
----
-
-## Возможности
-
-### Загрузка (Boot Screen)
-- Длинный BIOS-стиль загрузки с typewriter-эффектом, логотипом с глитчем, радар-развёрткой и прогресс-баром.
-- **Пробел** (или любая клавиша / клик) пропускает загрузку к стартовому гейту.
-- В конце загрузки — **"SYSTEM READY — PRESS SPACE TO START"**: система ждёт нажатия клавиши, прежде чем начать работу (фича).
-
-### Менеджер окон
-- Перетаскиваемые и масштабируемые окна на базе `react-rnd`.
-- Z-index управление (фокус по клику, «поверх всех»).
-- Сворачивание / разворачивание / восстановление / закрытие.
-- Анимации появления через `framer-motion`.
-- Защита через `ErrorBoundary` — падение одного окна не роняет всю оболочку.
-
-### Мини-программы (Apps)
-- Категории: **Network**, **Security**, **System**, **Developer**.
-- Реестр компонентов в `src/apps/registry.tsx`.
-- Часть программ реализована полностью, остальные показывают заглушку «MODULE NOT YET IMPLEMENTED».
-
-### Фоновые эффекты
-- **Matrix Rain** (по умолчанию) — классический «матричный» дождь на Canvas 2D.
-- **Cyber Grid** — анимированная сетка.
-- **Gradient** — статичный радиальный градиент.
-- **Star Field** — звёздное поле с эффектом гиперпрыжка (Canvas 2D, без WebGL).
-- **None** — без эффекта.
-- Scanline-оверлей для CRT-эффекта.
-
-### Виджеты
-- **ClockWidget** — большие часы, дата, часовой пояс.
-- **SystemVitals** — SVG-кольца: CPU, RAM, DISK и **FPS** (реальное измерение через `requestAnimationFrame`).
-- **GlobeWidget** — 3D-глобус с орбитальными точками (Three.js / WebGL, с защитой от краха).
-
-### Настройки (Settings Panel)
-- **Appearance**: выбор темы (Dark / Cyber Green / Light) и фона (5 вариантов).
-- **Performance**: Globe Widget, Reduce Motion, Low Power Mode, FPS Cap (24/30/60/120).
-- **Audio**: вкл/выкл звуковые эффекты.
-- **API Keys**: поля для AbuseIPDB, VirusTotal, NVD (хранятся в памяти).
+- **StatusBar (Сверху)**: Логотип, живые виталы CPU/RAM, статус сети ONLINE, индикатор Джарвиса, полноэкранный режим (F11), часы и кнопка настроек.
+- **Sidebar (Слева)**: 4 категории утилит (Network, Security, System, Developer) и 24 полноценные мини-программы.
+- **SideRail (Справа)**: Панель приборов — `NetworkMonitor` (трафик eth0), `AudioVisualizer` (эквалайзер), `ActivityHistory` (активность по дням/месяцам).
+- **TelemetryBar (Снизу)**: Телеметрическая панель — `CpuRamGraph` (график за 60с), `SystemVitals` (компактные кольца CPU/RAM/DISK/FPS) и интерактивный **MiniTerminal**.
+- **Workspace (Центр)**: Рабочая область с перетаскиваемыми и масштабируемыми окнами утилит (`react-rnd`) и оверлейными виджетами (`ClockWidget`, 3D `GlobeWidget`).
 
 ---
 
-## Технологии
+## ⚡ Выполненные возможности (Фазы 0–2)
 
-| Категория | Технология |
-|-----------|------------|
-| UI | React 18, TypeScript |
-| Сборка | Vite 5 |
-| Десктоп | Tauri 2 (Rust) |
-| Состояние | Zustand |
-| Окна | react-rnd |
-| Анимации | framer-motion |
-| 3D | three.js |
-| Иконки | lucide-react |
-| Стили | Tailwind CSS + кастомный CSS |
-| Графики | recharts (зависимость) |
+### 🛡️ Безопасность и Async Rust
+- **Асинхронный бэкенд с таймаутами**: Все сетевые утилиты (`ping`, `tracert`, `nslookup`) переведены на `tokio::task::spawn_blocking` + `tokio::time::timeout`. Программа **никогда не зависает** даже при долгой трассировке или недоступности узла.
+- **Скрытое выполнение на Windows**: Включён флаг `CREATE_NO_WINDOW (0x08000000)` — консольные окна не вылезают поверх GUI.
+- **Защита от Command Injection**: Все IP/Host значения санитизируются перед передачей в системную консоль.
+- **Точные байты памяти**: Форматирование RAM/Disk работает напрямую с байтами без завышения в 1024 раза.
+
+### 🎨 Дизайн и темы (eDEX-UI)
+- **3 Основные темы**: `Terminal Green` (дефолт), `Holo Cyan`, `Light Mode`.
+- **8 Экспериментальных тем**: `Dark`, `Cyber`, `Crimson`, `Noir`, `Amber`, `Graphite`, `Emerald`, `Ice`.
+- **9 Lazy-loaded Canvas фонов**: `Grid`, `Matrix`, `Particles`, `Stars`, `Nebula`, `Storm`, `Circuit`, `Hexagon`, `Aurora`, `Plasma`.
+- **Звуковой движок (WebAudio SFX)**: Тактильные sci-fi звуки кликов, открытия/закрытия окон, ошибок и системных тревог.
+
+### 💾 Сохранение настроек
+- **Zustand Persistence + Tauri Store**: Настройки персистятся в `$APPDATA/sysforge/settings.json` (в Tauri) или `localStorage` (в браузере).
+- **Безопасность API-ключей**: Ключи API (AbuseIPDB, VirusTotal, NVD) хранятся **только в оперативной памяти** сессии.
 
 ---
 
-## Структура проекта
+## 🧩 Мини-программы (24/24)
+
+Все 24 утилиты полностью реализованы и готовы к работе:
+
+### 🌐 Network (Сетевые утилиты)
+1. **Ping Monitor** (`ping`): Мониторинг латентности нескольких узлов с графиком тренда.
+2. **Traceroute** (`traceroute`): Трассировка маршрута с флагами **`-d` (без DNS)** и **`-h` (макс. хопов)**.
+3. **Port Scanner** (`port-scanner`): Сканирование TCP-портов (21, 22, 80, 443, 3306 и др.).
+4. **Bandwidth Monitor** (`bandwidth`): Скорость приёма/передачи (Mbps) и статистика ошибок интерфейса.
+5. **DNS Lookup** (`dns`): Запросы A, AAAA, MX, NS, TXT, CNAME через `nslookup`.
+6. **SSH Client** (`ssh`): Эмулятор терминала удаленного подключения с сессией.
+7. **Wake-on-LAN** (`wol`): Отправка Magic Packet (102 байта) на MAC-адрес по UDP.
+
+### 🛡️ Security (Безопасность)
+8. **Hash Tool** (`hash`): Вычисление MD5, SHA-1, SHA-256, SHA-512 для текста.
+9. **SSL Inspector** (`ssl`): Проверка сертификата домена, SAN и дней до истечения.
+10. **Password Generator** (`password`): Генератор стойких паролей с настройкой символов.
+11. **IP Intelligence** (`ip-intel`): Оценка угрозы IP (Abuse score), геолокация, ISP, Tor/Proxy.
+12. **Subnet Calc** (`subnet`): Калькулятор IPv4-сетей, маски, wildcard, диапазона IP.
+13. **JWT Decoder** (`jwt`): Декодер и валидатор JSON Web Token (Header / Payload / Signature).
+14. **CVE Search** (`cve`): Поиск уязвимостей в базе NVD с фильтрами CVSS.
+
+### 💻 System (Системные)
+15. **Process Manager** (`processes`): Живой список процессов (PID, CPU%, Memory), сортировка, поиск и модальное окно завершения процесса (с защитой PID <= 4).
+16. **System Overview** (`system-overview`): Обзор CPU, RAM, Swap, ОС, времени аптайма и дисков.
+17. **Log Analyzer** (`log`): Drag & Drop просмотрщик лог-файлов с подсветкой ошибок и фильтрами.
+18. **File Hash Check** (`file-hash`): Вычисление контрольных сумм файлов (MD5, SHA-1, SHA-256) и сверка.
+
+### 🛠️ Developer (Разработчику)
+19. **API Tester** (`api-tester`): REST-клиент (GET, POST, PUT, DELETE, Headers, Body, Response).
+20. **Data Formatter** (`formatter`): Валидация, форматирование и минификация JSON.
+21. **Encoder / Decoder** (`encoder`): Base64, URL, HTML Entity и Hex кодирование.
+22. **Regex Tester** (`regex`): Проверка регулярных выражений в реальном времени с подсветкой групп.
+23. **Snippet Manager** (`snippets`): Библиотека фрагментов кода с быстрым копированием.
+24. **Diff Viewer** (`diff`): Построчное сравнение текстов с подсветкой изменений.
+
+---
+
+## 🏗️ Архитектура и безопасность (Rust Async)
 
 ```
-sysforge/
-├── index.html              # HTML-точка входа
-├── package.json            # Зависимости и скрипты
-├── vite.config.ts          # Конфиг Vite (порт 1420 для Tauri)
-├── tailwind.config.js      # Конфиг Tailwind (тема, анимации)
-├── tsconfig.json           # Конфиг TypeScript
-├── postcss.config.js       # PostCSS (Tailwind + autoprefixer)
-├── .gitignore              # Игнорируемые файлы
-├── README.md               # Этот файл
-│
-├── public/                 # Статические ассеты
-│
-├── src/                    # Исходники фронтенда
-│   ├── main.tsx            # Точка входа React
-│   ├── App.tsx             # Корневой компонент (boot → desktop)
-│   ├── index.css           # Глобальные стили и CSS-переменные
-│   ├── vite-env.d.ts       # Типы Vite
-│   │
-│   ├── apps/               # Мини-программы
-│   │   ├── registry.tsx    # Реестр: id → компонент
-│   │   ├── network/        # PingMonitor, PortScanner, DnsLookup
-│   │   ├── security/       # HashTool, PasswordGenerator, SubnetCalc, JwtDecoder
-│   │   ├── system/         # SystemOverview
-│   │   └── developer/      # EncoderDecoder
-│   │
-│   ├── components/         # UI-компоненты оболочки
-│   │   ├── BootScreen/     # Анимированный бут-экран
-│   │   ├── Header/         # Верхняя панель + Settings
-│   │   ├── Sidebar/        # Категории и список программ
-│   │   ├── Taskbar/        # Нижняя панель задач
-│   │   ├── WindowFrame/    # Рамка окна (drag/resize/min/max)
-│   │   ├── ErrorBoundary/  # Перехват ошибок React
-│   │   ├── Settings/       # Модальная панель настроек
-│   │   ├── effects/        # BackgroundEffects, MatrixRain, StarField, ParticleNetwork
-│   │   ├── widgets/        # ClockWidget, SystemVitals, GlobeWidget
-│   │   └── ui/             # Переиспользуемые UI: Card, Button, Input, Select, Badge
-│   │
-│   ├── hooks/              # Хуки
-│   │   ├── useTauri.ts     # Обёртка над invoke() с browser-fallback
-│   │   └── useInterval.ts  # setInterval-хук
-│   │
-│   └── store/              # Zustand-сторы
-│       ├── windowStore.ts  # Менеджер окон
-│       ├── settingsStore.ts# Настройки (тема, фон, производительность, API-ключи)
-│       └── historyStore.ts # История (HTTP, поиск)
-│
-└── src-tauri/              # Бэкенд Tauri (Rust)
-    ├── Cargo.toml          # Зависимости Rust
-    ├── tauri.conf.json     # Конфиг Tauri (окно, иконки, capabilities)
-    ├── build.rs            # Скрипт сборки
-    ├── src/                # main.rs, lib.rs
-    ├── icons/              # Иконки приложения
-    └── capabilities/       # Права Tauri
+SysForge Frontend (React 18 + Zustand)
+       │
+       ├─► IPC Invoke (Tauri 2)
+       │       │
+       │       ▼
+       ├─► lib.rs (Rust Backend)
+       │     ├─ validate_host() [Защита от инъекций]
+       │     ├─ tokio::task::spawn_blocking
+       │     └─ tokio::time::timeout (Таймауты 10s - 60s)
+       │
+       └─► Fallback (В обычном браузере используются безопасные моки)
 ```
 
 ---
 
-## Установка и запуск
+## 🛠️ Технологии
+
+- **Frontend**: React 18, TypeScript, Vite 5, Tailwind CSS, Lucide Icons, Framer Motion, Recharts, Three.js (WebGL Globe).
+- **Backend**: Tauri 2, Rust (`sysinfo 0.30`, `tokio 1.0`, `tauri-plugin-store`, `tauri-plugin-fs`, `tauri-plugin-shell`).
+
+---
+
+## 🚀 Установка и запуск
 
 ### Требования
 - **Node.js** 18+
-- **npm** (или yarn/pnpm)
-- Для десктоп-сборки: **Rust** + **Tauri CLI** (см. [tauri.app](https://tauri.app))
+- **Rust** & **Tauri CLI** (для десктопного запуска)
 
-### Установка зависимостей
-
+### Запуск в дев-режиме (Web)
 ```bash
-cd sysforge
 npm install
-```
-
-### Запуск в браузере (web-режим)
-
-```bash
 npm run dev
 ```
+Откройте `http://localhost:1420`.
 
-Открой **http://localhost:1420** в браузере. В web-режиме Tauri-команды возвращают `undefined`, а мини-программы используют mock-данные.
-
-### Запуск как десктоп-приложение (Tauri)
-
+### Запуск в режиме Tauri Desktop
 ```bash
 npm run tauri dev
 ```
 
-Для production-сборки:
-
+### Сборка Production
 ```bash
-npm run tauri build
+npm run build
 ```
 
 ---
 
-## Скрипты
+## 🤖 Планируемый ИИ-помощник «Джарвис» (Фаза 3)
 
-| Скрипт | Описание |
-|--------|----------|
-| `npm run dev` | Запуск Vite dev-сервера (порт 1420) |
-| `npm run build` | `tsc && vite build` — проверка типов и production-сборка |
-| `npm run preview` | Предпросмотр production-сборки |
-| `npm run tauri` | Доступ к Tauri CLI (`tauri dev`, `tauri build`) |
+В следующей фазе в SysForge будет интегрирован голосовой ИИ-ассистент **«Джарвис»**, предназначенный для автоматизации задач управления ОС и браузером:
 
----
-
-## Мини-программы
-
-### Network
-| ID | Название | Статус |
-|----|----------|--------|
-| `ping` | Ping Monitor | ✅ Реализован (симуляция) |
-| `traceroute` | Traceroute | ⏳ Заглушка |
-| `port-scanner` | Port Scanner | ✅ Реализован (симуляция) |
-| `bandwidth` | Bandwidth | ⏳ Заглушка |
-| `dns` | DNS Lookup | ✅ Реализован (mock) |
-| `ssh` | SSH Client | ⏳ Заглушка |
-| `wol` | Wake-on-LAN | ⏳ Заглушка |
-
-### Security
-| ID | Название | Статус |
-|----|----------|--------|
-| `hash` | Hash Tool | ✅ Реализован (MD5/SHA/CRC32, Web Crypto) |
-| `ssl` | SSL Inspector | ⏳ Заглушка |
-| `password` | Password Generator | ✅ Реализован |
-| `ip-intel` | IP Intelligence | ⏳ Заглушка |
-| `subnet` | Subnet Calc | ✅ Реализован |
-| `jwt` | JWT Decoder | ✅ Реализован |
-| `cve` | CVE Search | ⏳ Заглушка |
-
-### System
-| ID | Название | Статус |
-|----|----------|--------|
-| `processes` | Process Manager | ⏳ Заглушка |
-| `system-overview` | System Overview | ✅ Реализован (mock / Tauri) |
-| `logs` | Log Analyzer | ⏳ Заглушка |
-| `file-hash` | File Hash Check | ⏳ Заглушка |
-
-### Developer
-| ID | Название | Статус |
-|----|----------|--------|
-| `api-tester` | API Tester | ⏳ Заглушка |
-| `formatter` | Data Formatter | ⏳ Заглушка |
-| `encoder` | Encoder/Decoder | ✅ Реализован |
-| `regex` | Regex Tester | ⏳ Заглушка |
-| `snippets` | Snippet Manager | ⏳ Заглушка |
-| `diff` | Diff Viewer | ⏳ Заглушка |
-
-> ✅ = полностью реализован · ⏳ = заглушка «MODULE NOT YET IMPLEMENTED»
+### Ключевые возможности Джарвиса:
+1. **Управление ОС и Браузером**:
+   - Выполнение сложная автоматизации (например: *"Джарвис, открой YouTube и включи последнее видео MrBeast"*).
+   - Управление окнами и настройками SysForge голосом и текстом.
+2. **Обучение и Автономное Приобретение Навыков (Self-Learning & Skill Creation)**:
+   - Джарвис сможет обучаться выполнению последовательностей действий по запросу пользователя и сохранять их как готовые скрипты/навыки.
+3. **Гибкая Настройка ИИ-провайдеров**:
+   - Поддержка **локальных ИИ-моделей** (`Ollama`, `LM Studio`, `LocalAI` через локальный REST API).
+   - Поддержка **облачных API** (`OpenAI`, `Google Gemini`, `Anthropic Claude`, `Custom OpenAI-compatible API`).
+4. **Интеллектуальные Ответы (QA & Sysadmin Knowledge)**:
+   - Чёткие и точные ответы на вопросы по администрированию, программированию и безопасности.
+5. **Голосовой и Визуальный HUD Интерфейс**:
+   - Распознавание речи (STT) + синтез речи (TTS) с эффектом Sci-Fi голоса.
+   - Живой индикатор состояния в `StatusBar` (`IDLE` ➔ `LISTENING` ➔ `THINKING` ➔ `EXECUTING` ➔ `SPEAKING`).
 
 ---
 
-## Виджеты и фон
+## 📄 Лицензия
 
-### SystemVitals
-SVG-кольца в правом нижнем углу:
-- **CPU** (красный) — загрузка процессора
-- **RAM** (синий) — использование памяти
-- **DISK** (зелёный) — занятость диска
-- **FPS** (жёлтый) — реальный FPS рендера
-
-### Фоны
-Выбор через **Settings → Appearance → Background**:
-- `matrix` — Matrix Rain (по умолчанию)
-- `grid` — Cyber Grid
-- `gradient` — Gradient
-- `stars` — Star Field
-- `none` — без эффекта
-
-В **Low Power Mode** всегда используется статичный градиент.
-
----
-
-## Настройки
-
-Открываются кнопкой **Settings** в Header. Разделы:
-
-### Appearance
-- **Theme**: Dark / Cyber Green / Light
-- **Background**: Matrix / Grid / Gradient / Stars / None
-
-### Performance
-- Globe Widget (вкл/выкл 3D-глобус)
-- Reduce Motion
-- Low Power Mode
-- FPS Cap: 24 / 30 / 60 / 120
-
-### Audio
-- Audio Effects (вкл/выкл)
-
-### API Keys
-- AbuseIPDB, VirusTotal, NVD (хранятся в памяти, не персистятся)
-
----
-
-## Архитектура
-
-### Поток данных
-```
-App.tsx
-  ├─ BootScreen (пока bootComplete === false)
-  └─ Desktop
-       ├─ BackgroundEffects ← settingsStore.background
-       ├─ Header → SettingsPanel ← settingsStore
-       ├─ Sidebar → windowStore.openWindow()
-       ├─ Workspace
-       │    ├─ ClockWidget
-       │    ├─ SystemVitals (CPU/RAM/DISK/FPS)
-       │    ├─ GlobeWidget ← settingsStore.performance.globeWidget
-       │    └─ WindowFrame[] ← windowStore.windows
-       │         └─ getAppComponent(id) ← apps/registry.tsx
-       └─ Taskbar ← windowStore
-```
-
-### Сторы (Zustand)
-- **`windowStore`** — `Map<id, WindowState>`, управление окнами (open/close/min/max/restore/focus/position/size).
-- **`settingsStore`** — тема, фон, производительность, аудио, API-ключи.
-- **`historyStore`** — история HTTP-запросов и поиска.
-
-### Tauri-интеграция
-- `useTauri()` — хук-обёртка: в браузере возвращает `undefined`, в Tauri вызывает Rust-команды через динамический `import('@tauri-apps/api/core')`.
-- Мини-программы (например, `SystemOverview`) проверяют `isAvailable` и используют mock-данные в web-режиме.
-
-### Защита от краха
-- `ErrorBoundary` оборачивает `BackgroundEffects`, `GlobeWidget` и блок окон — падение одного компонента не роняет весь UI.
-- WebGL-инициализация (`THREE.WebGLRenderer`) в `ParticleNetwork` и `GlobeWidget` обёрнута в `try/catch`.
-
----
-
-## Скриншоты концепта
-
-> _Добавь сюда скриншоты после запуска:_
-> 1. Boot screen с радаром и логотипом
-> 2. Рабочий стол с Matrix Rain и Sidebar
-> 3. Открытое окно мини-программы
-> 4. Панель настроек
-
----
-
-## Лицензия
-
-Уточни лицензию (например, MIT). По умолчанию — приватный проект.
-
----
-
-## Roadmap (идеи)
-
-- [ ] Персистентность настроек (localStorage / Tauri store)
-- [ ] Реальные Tauri-команды для Ping/PortScanner/DNS
-- [ ] SSH-клиент через `tauri-plugin-shell`
-- [ ] Process Manager с реальными данными системы
-- [ ] Drag-and-drop файлов для File Hash Check
-- [ ] Темы: полноценная реализация Cyber Green / Light
-- [ ] Звуковые эффекты UI
-- [ ] Code-splitting и lazy-loading мини-программ
+Private / Proprietary Project — SysForge Team.

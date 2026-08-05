@@ -78,6 +78,15 @@ export default function BootScreen({ onComplete }: BootScreenProps) {
     setPhase('awaitingStart');
   }, []);
 
+  // Auto-start 4s after reaching the start gate
+  useEffect(() => {
+    if (phase !== 'awaitingStart') return;
+    const timer = window.setTimeout(() => {
+      if (phaseRef.current === 'awaitingStart') finishBoot();
+    }, 4000);
+    return () => clearTimeout(timer);
+  }, [phase, finishBoot]);
+
   useEffect(() => {
     // Stage 1: typewriter text
     let lineIndex = 0;

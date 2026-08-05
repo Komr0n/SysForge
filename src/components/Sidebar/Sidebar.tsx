@@ -78,10 +78,16 @@ const apps: AppItem[] = [
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const [activeCategory, setActiveCategory] = useState('network');
+  const windows = useWindowStore((s) => s.windows);
   const openWindow = useWindowStore((s) => s.openWindow);
+  const bringToFront = useWindowStore((s) => s.bringToFront);
 
   const handleAppClick = (app: AppItem) => {
-    openWindow(app.id, app.title, '', app.id);
+    if (windows.has(app.id)) {
+      bringToFront(app.id);
+    } else {
+      openWindow(app.id, app.title, '', app.id);
+    }
   };
 
   const filteredApps = apps.filter((a) => a.category === activeCategory);

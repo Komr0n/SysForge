@@ -4,15 +4,13 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "shell:allow-execute",
-    "shell:allow-open",
+    "store:default",
     "fs:allow-read",
     "fs:allow-write",
     {
       "identifier": "fs:scope",
       "allow": [
-        { "path": "$APPDATA/**" },
-        { "path": "$HOME/**" }
+        { "path": "$APPDATA/sysforge/**" }
       ]
     }
   ]

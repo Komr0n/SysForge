@@ -1,15 +1,40 @@
 import { useEffect } from 'react';
 import { useSettingsStore, ThemeMode } from '../../store/settingsStore';
 
-/**
- * ThemeManager — applies the selected theme to the document root
- * by overriding CSS custom properties (--accent-primary, --bg-primary, etc.)
- *
- * This is what actually makes themes WORK. Without it, the theme setting
- * in the store had no visible effect.
- */
-
 const THEMES: Record<ThemeMode, Record<string, string>> = {
+  'terminal-green': {
+    '--bg-primary': '#050a05',
+    '--bg-surface': '#0a180d',
+    '--accent-primary': '#00ff88',
+    '--accent-secondary': '#22d3ee',
+    '--danger': '#ef4444',
+    '--warning': '#f59e0b',
+    '--text-primary': '#e2e8f0',
+    '--text-muted': '#4a7a5a',
+    '--border-color': '#14381e',
+  },
+  'holo-cyan': {
+    '--bg-primary': '#020e16',
+    '--bg-surface': '#061826',
+    '--accent-primary': '#0ea5e9',
+    '--accent-secondary': '#38bdf8',
+    '--danger': '#ef4444',
+    '--warning': '#f59e0b',
+    '--text-primary': '#e2e8f0',
+    '--text-muted': '#4a6a8a',
+    '--border-color': '#0e2a3a',
+  },
+  light: {
+    '--bg-primary': '#f1f5f9',
+    '--bg-surface': '#ffffff',
+    '--accent-primary': '#059669',
+    '--accent-secondary': '#0284c7',
+    '--danger': '#dc2626',
+    '--warning': '#d97706',
+    '--text-primary': '#0f172a',
+    '--text-muted': '#64748b',
+    '--border-color': '#cbd5e1',
+  },
   dark: {
     '--bg-primary': '#0a0e1a',
     '--bg-surface': '#111827',
@@ -98,24 +123,13 @@ const THEMES: Record<ThemeMode, Record<string, string>> = {
     '--text-muted': '#4a6a8a',
     '--border-color': '#0e2a3a',
   },
-  light: {
-    '--bg-primary': '#f1f5f9',
-    '--bg-surface': '#ffffff',
-    '--accent-primary': '#059669',
-    '--accent-secondary': '#0284c7',
-    '--danger': '#dc2626',
-    '--warning': '#d97706',
-    '--text-primary': '#0f172a',
-    '--text-muted': '#64748b',
-    '--border-color': '#cbd5e1',
-  },
 };
 
 export default function ThemeManager() {
   const theme = useSettingsStore((s) => s.theme);
 
   useEffect(() => {
-    const vars = THEMES[theme] ?? THEMES.dark;
+    const vars = THEMES[theme] ?? THEMES['terminal-green'];
     const root = document.documentElement;
     Object.entries(vars).forEach(([key, value]) => {
       root.style.setProperty(key, value);
@@ -125,14 +139,19 @@ export default function ThemeManager() {
   return null;
 }
 
-export const THEME_OPTIONS: { value: ThemeMode; label: string; preview: string }[] = [
-  { value: 'dark', label: 'Dark', preview: '#00ff88' },
+export const PRIMARY_THEME_OPTIONS: { value: ThemeMode; label: string; preview: string }[] = [
+  { value: 'terminal-green', label: 'Terminal Green (Default)', preview: '#00ff88' },
+  { value: 'holo-cyan', label: 'Holo Cyan', preview: '#0ea5e9' },
+  { value: 'light', label: 'Light Mode', preview: '#059669' },
+];
+
+export const EXPERIMENTAL_THEME_OPTIONS: { value: ThemeMode; label: string; preview: string }[] = [
+  { value: 'dark', label: 'Classic Dark', preview: '#00ff88' },
   { value: 'cyber', label: 'Cyber Green', preview: '#00ff66' },
   { value: 'crimson', label: 'Crimson', preview: '#ff2838' },
   { value: 'noir', label: 'Noir Black', preview: '#e2e8f0' },
-  { value: 'amber', label: 'Amber', preview: '#ffbf00' },
+  { value: 'amber', label: 'Amber Terminal', preview: '#ffbf00' },
   { value: 'graphite', label: 'Graphite', preview: '#94a3b8' },
   { value: 'emerald', label: 'Emerald', preview: '#10d97e' },
-  { value: 'ice', label: 'Ice', preview: '#38bdf8' },
-  { value: 'light', label: 'Light', preview: '#059669' },
+  { value: 'ice', label: 'Ice Cyan', preview: '#38bdf8' },
 ];
