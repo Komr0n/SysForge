@@ -1,5 +1,4 @@
 import { create } from 'zustand';
-import { ReactNode } from 'react';
 import { sfx } from '../lib/sfx';
 
 export interface WindowState {
@@ -76,11 +75,16 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
     if (win) {
       const headerH = 44;
       const taskbarH = 40;
+      // Measure the actual workspace container so the maximized window
+      // accounts for the sidebar/side rail instead of the whole viewport.
+      const workspace = document.querySelector('[data-workspace]');
+      const w = workspace ? workspace.clientWidth : window.innerWidth;
+      const h = workspace ? workspace.clientHeight : window.innerHeight - headerH - taskbarH;
       newWindows.set(id, {
         ...win,
         isMaximized: true,
         position: { x: 0, y: 0 },
-        size: { w: window.innerWidth, h: window.innerHeight - headerH - taskbarH },
+        size: { w, h },
       });
       set({ windows: newWindows });
     }

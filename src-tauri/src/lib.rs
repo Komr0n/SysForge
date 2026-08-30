@@ -1,6 +1,11 @@
-use serde::Serialize;
+pub mod jarvis;
+pub mod voice;
+
+use jarvis::intent::{embed_text, match_intent, IntentMatch, PhraseRegistry, SlotSchema};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Signal, System};
 use tauri::State;
 use tokio::time::timeout;
@@ -14,6 +19,7 @@ pub struct SystemInfo {
     pub cpu_name: String,
     pub cpu_cores: usize,
     pub cpu_usage: f32,
+    pub cpus_usage: Vec<f32>,
     pub total_memory_bytes: u64,
     pub used_memory_bytes: u64,
     pub total_swap_bytes: u64,
@@ -44,8 +50,37 @@ pub struct ProcessInfo {
     pub user: String,
 }
 
-struct AppState {
-    system: Mutex<System>,
+#[derive(Serialize, Clone, Debug)]
+pub struct NetworkStatItem {
+    pub name: String,
+    pub rx_bytes_per_sec: u64,
+    pub tx_bytes_per_sec: u64,
+    pub total_rx_bytes: u64,
+    pub total_tx_bytes: u64,
+}
+
+#[derive(Serialize)]
+pub struct NetworkStatsResponse {
+    pub interfaces: Vec<NetworkStatItem>,
+}
+
+#[derive(Deserialize, Debug)]
+pub struct SkillIndexInput {
+    pub id: String,
+    pub phrases: Vec<String>,
+    pub slots: Option<HashMap<String, SlotSchema>>,
+}
+
+pub struct PrevNetworkSnapshot {
+    pub timestamp: Instant,
+    pub interfaces: HashMap<String, (u64, u64)>, // (rx_total, tx_total)
+}
+
+pub struct AppState {
+    pub system: Mutex<System>,
+    pub networks: Mutex<Networks>,
+    pub prev_network: Mutex<PrevNetworkSnapshot>,
+    pub jarvis_registry: Mutex<PhraseRegistry>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -126,16 +161,22 @@ impl CommandExt for std::process::Command {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Tauri commands
+// System Commands
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
 fn get_system_info(state: State<AppState>) -> SystemInfo {
     let mut sys = state.system.lock().unwrap();
-    sys.refresh_cpu();
+    sys.refresh_cpu_usage();
     sys.refresh_memory();
 
-    let cpu_info = sys.global_cpu_info();
+    let cpu_name = sys
+        .cpus()
+        .first()
+        .map(|c| c.brand().to_string())
+        .unwrap_or_else(|| "CPU".to_string());
+    let cpu_usage = sys.global_cpu_info().cpu_usage();
+    let cpus_usage: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
 
     let disks = Disks::new_with_refreshed_list();
     let disk_info: Vec<DiskInfo> = disks
@@ -148,13 +189,14 @@ fn get_system_info(state: State<AppState>) -> SystemInfo {
         })
         .collect();
 
-    let networks = Networks::new_with_refreshed_list();
-    let net_interfaces: Vec<String> = networks.iter().map(|(name, _)| name.clone()).collect();
+    let net = state.networks.lock().unwrap();
+    let net_interfaces: Vec<String> = net.iter().map(|(name, _)| name.clone()).collect();
 
     SystemInfo {
-        cpu_name: cpu_info.brand().to_string(),
+        cpu_name,
         cpu_cores: sys.cpus().len(),
-        cpu_usage: cpu_info.cpu_usage(),
+        cpu_usage,
+        cpus_usage,
         total_memory_bytes: sys.total_memory(),
         used_memory_bytes: sys.used_memory(),
         total_swap_bytes: sys.total_swap(),
@@ -166,6 +208,50 @@ fn get_system_info(state: State<AppState>) -> SystemInfo {
         disks: disk_info,
         network_interfaces: net_interfaces,
     }
+}
+
+#[tauri::command]
+fn get_network_stats(state: State<AppState>) -> NetworkStatsResponse {
+    let mut networks = state.networks.lock().unwrap();
+    networks.refresh();
+
+    let mut prev_snap = state.prev_network.lock().unwrap();
+    let now = Instant::now();
+    let elapsed = now.duration_since(prev_snap.timestamp).as_secs_f64().max(0.1);
+
+    let mut items = Vec::new();
+    let mut new_snap_map = HashMap::new();
+
+    for (name, data) in networks.iter() {
+        let total_rx = data.total_received();
+        let total_tx = data.total_transmitted();
+
+        let (rx_rate, tx_rate) = if let Some(&(prev_rx, prev_tx)) = prev_snap.interfaces.get(name) {
+            let diff_rx = total_rx.saturating_sub(prev_rx);
+            let diff_tx = total_tx.saturating_sub(prev_tx);
+            (
+                (diff_rx as f64 / elapsed).round() as u64,
+                (diff_tx as f64 / elapsed).round() as u64,
+            )
+        } else {
+            (0, 0)
+        };
+
+        new_snap_map.insert(name.clone(), (total_rx, total_tx));
+
+        items.push(NetworkStatItem {
+            name: name.clone(),
+            rx_bytes_per_sec: rx_rate,
+            tx_bytes_per_sec: tx_rate,
+            total_rx_bytes: total_rx,
+            total_tx_bytes: total_tx,
+        });
+    }
+
+    prev_snap.timestamp = now;
+    prev_snap.interfaces = new_snap_map;
+
+    NetworkStatsResponse { interfaces: items }
 }
 
 #[tauri::command]
@@ -243,7 +329,7 @@ async fn traceroute_host(
     let (prog, args): (&str, Vec<String>) = {
         let mut a = vec!["-h".to_string(), hops, "-w".to_string(), "3000".to_string()];
         if nofrag {
-            a.push("-d".to_string()); // -d = don't resolve hostnames (speeds up + no-frag alike)
+            a.push("-d".to_string()); // -d = don't resolve hostnames
         }
         a.push(host.clone());
         ("tracert", a)
@@ -288,7 +374,6 @@ async fn dns_lookup(host: String, query_type: Option<String>) -> Result<String, 
         .unwrap_or("A")
         .to_uppercase();
 
-    // Validate query type
     let valid_qtypes = ["A", "AAAA", "MX", "NS", "TXT", "CNAME", "PTR", "SOA"];
     let qtype = if valid_qtypes.contains(&qtype.as_str()) {
         qtype
@@ -334,7 +419,6 @@ async fn run_terminal_command(command: String) -> Result<String, String> {
             }
         }
         "nslookup" | "dig" => {
-            // nslookup <host> [type]
             if let Some(h) = args.first() {
                 let qtype = args.get(1).map(|s| s.to_string());
                 dns_lookup(h.to_string(), qtype).await
@@ -374,10 +458,119 @@ async fn run_terminal_command(command: String) -> Result<String, String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Jarvis Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn jarvis_match_intent(
+    state: State<AppState>,
+    text: String,
+) -> Option<IntentMatch> {
+    let registry = state.jarvis_registry.lock().unwrap();
+    match_intent(&text, &registry, 0.45)
+}
+
+#[tauri::command]
+fn jarvis_reindex_skill(
+    _state: State<AppState>,
+    skill_id: String,
+) -> Result<(), String> {
+    println!("[JARVIS] Reindexing skill: {}", skill_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn jarvis_build_intent_index(
+    state: State<AppState>,
+    skills: Vec<SkillIndexInput>,
+) -> Result<(), String> {
+    let mut registry = state.jarvis_registry.lock().unwrap();
+    for skill in skills {
+        for phrase in skill.phrases {
+            let vec = embed_text(&phrase);
+            registry.insert_phrase(&skill.id, phrase, vec);
+        }
+        if let Some(slots) = skill.slots {
+            registry.register_slots(&skill.id, slots);
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn jarvis_open_url(url: String) -> Result<(), String> {
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL must start with http:// or https://".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let res = run_cmd_timeout("cmd", &["/c", "start", "", &url], 5).await;
+        res.map(|_| ())
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let res = run_cmd_timeout("open", &[&url], 5).await;
+        res.map(|_| ())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let res = run_cmd_timeout("xdg-open", &[&url], 5).await;
+        res.map(|_| ())
+    }
+}
+
+#[tauri::command]
+async fn jarvis_open_system_app(program: String) -> Result<String, String> {
+    if program.trim().is_empty() {
+        return Err("Program name cannot be empty".to_string());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let res = run_cmd_timeout("cmd", &["/c", "start", "", &program], 5).await;
+        res.map(|_| format!("Started {}", program))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let res = run_cmd_timeout("open", &[&program], 5).await;
+        res.map(|_| format!("Started {}", program))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let res = run_cmd_timeout("xdg-open", &[&program], 5).await;
+        res.map(|_| format!("Started {}", program))
+    }
+}
+
+#[tauri::command]
+async fn jarvis_lock_screen() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        run_cmd_timeout("rundll32.exe", &["user32.dll,LockWorkStation"], 5)
+            .await
+            .map(|_| ())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("Lock screen not supported on this OS".to_string())
+    }
+}
+
+#[tauri::command]
+fn delete_file(path: String) -> Result<String, String> {
+    if path.is_empty() {
+        return Err("Path cannot be empty".to_string());
+    }
+    std::fs::remove_file(&path)
+        .map(|_| format!("File '{}' deleted successfully.", path))
+        .map_err(|e| format!("Failed to delete file '{}': {}", path, e))
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Argument parsers for terminal commands
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Parse: ping [-n count] <host>
 fn parse_ping_args<'a>(args: &'a [&'a str]) -> (Option<u32>, Option<&'a str>) {
     let mut count: Option<u32> = None;
     let mut host: Option<&str> = None;
@@ -402,7 +595,6 @@ fn parse_ping_args<'a>(args: &'a [&'a str]) -> (Option<u32>, Option<&'a str>) {
     (count, host)
 }
 
-/// Parse: tracert [-d] [-h hops] <host>
 fn parse_tracert_args<'a>(args: &'a [&'a str]) -> (Option<u32>, bool, Option<&'a str>) {
     let mut max_hops: Option<u32> = None;
     let mut no_dns = false;
@@ -435,23 +627,94 @@ fn parse_tracert_args<'a>(args: &'a [&'a str]) -> (Option<u32>, bool, Option<&'a
 // App entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
+fn create_initial_registry() -> PhraseRegistry {
+    let mut reg = PhraseRegistry::new();
+
+    // Seed default skills
+    let ping_phrases = vec![
+        "пингани шлюз".to_string(),
+        "проверь пинг до роутера".to_string(),
+        "какой пинг".to_string(),
+        "пинг".to_string(),
+        "ping gateway".to_string(),
+        "check latency".to_string(),
+    ];
+    for p in ping_phrases {
+        let v = embed_text(&p);
+        reg.insert_phrase("builtin-ping-gateway", p, v);
+    }
+    let mut ping_slots = HashMap::new();
+    ping_slots.insert(
+        "host".to_string(),
+        SlotSchema {
+            default: Some("192.168.1.1".to_string()),
+            context_words: Some(vec!["до".to_string(), "to".to_string()]),
+            pattern: Some("ip_or_hostname".to_string()),
+        },
+    );
+    reg.register_slots("builtin-ping-gateway", ping_slots);
+
+    let status_phrases = vec![
+        "статус системы".to_string(),
+        "как система".to_string(),
+        "покажи состояние".to_string(),
+        "что с железом".to_string(),
+        "system status".to_string(),
+        "show info".to_string(),
+    ];
+    for p in status_phrases {
+        let v = embed_text(&p);
+        reg.insert_phrase("builtin-system-status", p, v);
+    }
+
+    let proc_phrases = vec![
+        "открой процессы".to_string(),
+        "диспетчер задач".to_string(),
+        "покажи процессы".to_string(),
+        "запущенные программы".to_string(),
+        "open processes".to_string(),
+        "task manager".to_string(),
+    ];
+    for p in proc_phrases {
+        let v = embed_text(&p);
+        reg.insert_phrase("builtin-open-processes", p, v);
+    }
+
+    reg
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let net = Networks::new_with_refreshed_list();
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
         .manage(AppState {
             system: Mutex::new(System::new()),
+            networks: Mutex::new(net),
+            prev_network: Mutex::new(PrevNetworkSnapshot {
+                timestamp: Instant::now(),
+                interfaces: HashMap::new(),
+            }),
+            jarvis_registry: Mutex::new(create_initial_registry()),
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
+            get_network_stats,
             get_processes,
             kill_process,
             ping_host,
             dns_lookup,
             traceroute_host,
             run_terminal_command,
+            delete_file,
+            jarvis_match_intent,
+            jarvis_build_intent_index,
+            jarvis_reindex_skill,
+            jarvis_open_url,
+            jarvis_open_system_app,
+            jarvis_lock_screen,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

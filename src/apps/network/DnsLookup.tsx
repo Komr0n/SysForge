@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Button, Input, Select, Textarea, Badge } from '../../components/ui';
+import { useTauri } from '../../hooks/useTauri';
 
 interface DnsRecord {
   type: string;
@@ -49,6 +50,7 @@ function mockRecord(domain: string, type: string): DnsRecord {
 }
 
 export default function DnsLookup() {
+  const { invoke, isAvailable } = useTauri();
   const [domain, setDomain] = useState('example.com');
   const [recordType, setRecordType] = useState('A');
   const [server, setServer] = useState('8.8.8.8');
@@ -58,19 +60,88 @@ export default function DnsLookup() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const lookup = (domainName: string) => {
+  /** Parse nslookup output into records (real backend mode). */
+  function parseNslookup(output: string, type: string, queriedName: string): DnsRecord[] {
+    const records: DnsRecord[] = [];
+    const lines = output.split(/\r?\n/);    let currentName = queriedName;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      // Section header like "example.com  MX preference = 10, mail exchanger = ..."
+      if (/^(\S+\.[A-Za-z0-9-]+)\s+text\s*=/.test(line) || /^\s*text\s*=/.test(line)) {
+        const m = line.match(/^(?:(\S+\.[A-Za-z0-9-]+)\s+)?text\s*=\s*(.+)$/i);
+        if (m) records.push({ type: 'TXT', name: m[1] ?? currentName, value: `"${m[2].trim()}"`, ttl: '—' });
+        continue;
+      }
+      const mailEx = line.match(/^(?:(\S+\.[A-Za-z0-9-]+)\s+)?MX preference = (\d+), mail exchanger = (\S+)/i);
+      if (mailEx) {
+        records.push({ type: 'MX', name: mailEx[1] ?? currentName, value: `${mailEx[2]} ${mailEx[3]}`, ttl: '—' });
+        continue;
+      }
+      const nameserver = line.match(/nameserver = (\S+)/i);
+      if (nameserver) {
+        records.push({ type: 'NS', name: currentName, value: nameserver[1], ttl: '—' });
+        continue;
+      }
+      const cname = line.match(/canonical name = (\S+)/i);
+      if (cname) {
+        records.push({ type: 'CNAME', name: currentName, value: cname[1], ttl: '—' });
+        continue;
+      }
+      const soa = line.match(/origin = (\S+)/i);
+      if (soa) {
+        records.push({ type: 'SOA', name: currentName, value: soa[1], ttl: '—' });
+        continue;
+      }
+      // A/AAAA addresses
+      const addrMatch = line.match(/^(?:(\S+)\s+)?Address:\s*([0-9a-fA-F:.]+)\s*$/);
+      if (addrMatch) {
+        const ip = addrMatch[2];
+        if (ip === server) continue; // the resolver's own address echoed by nslookup
+        records.push({
+          type: ip.includes(':') ? 'AAAA' : 'A',
+          name: addrMatch[1] ?? currentName,
+          value: ip,
+          ttl: '—',
+        });
+      }
+      const nameLine = line.match(/^(\S+\.[A-Za-z0-9-]+)\s*$/);
+      if (nameLine) currentName = nameLine[1];
+    }
+    return records;
+  }
+
+  const lookup = async (domainName: string) => {
     if (!domainName.trim()) return;
     setLoading(true);
     setError('');
-    setTimeout(() => {
-      if (bulkMode && domainName.includes('\n')) {
-        const domains = domainName.split('\n').filter((d) => d.trim());
-        setRecords(domains.flatMap((d) => mockRecord(d.trim(), recordType)));
+
+    try {
+      if (isAvailable) {
+        // Real lookup via Rust → nslookup. For bulk mode query each domain.
+        const domains = domainName.split('\n').map((d) => d.trim()).filter(Boolean);
+        const all: DnsRecord[] = [];
+        for (const d of domains) {
+          try {
+            const out = await invoke<string>('dns_lookup', { host: d, queryType: recordType });
+            all.push(...parseNslookup(out ?? '', recordType, d));
+          } catch (e) {
+            setError(`Lookup failed for ${d}: ${String(e)}`);
+          }
+        }
+        setRecords(all);
       } else {
-        setRecords([mockRecord(domainName.trim(), recordType)]);
+        // Browser fallback: deterministic mock data
+        await new Promise((r) => setTimeout(r, 400));
+        if (bulkMode && domainName.includes('\n')) {
+          const domains = domainName.split('\n').filter((d) => d.trim());
+          setRecords(domains.flatMap((d) => mockRecord(d.trim(), recordType)));
+        } else {
+          setRecords([mockRecord(domainName.trim(), recordType)]);
+        }
       }
+    } finally {
       setLoading(false);
-    }, 400);
+    }
   };
 
   const handleBulkChange = (text: string) => {

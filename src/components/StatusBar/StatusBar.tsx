@@ -1,9 +1,25 @@
 import { useState, useEffect } from 'react';
-import { Terminal, Settings, Maximize, Minimize, Wifi } from 'lucide-react';
+import { Terminal, Settings, Maximize, Minimize, Wifi, Mic, MicOff, MessageSquare, Bot } from 'lucide-react';
 import SettingsPanel from '../Settings/SettingsPanel';
 import { useTauri } from '../../hooks/useTauri';
+import { JarvisOrb, STATE_LABELS } from '../JarvisUI/JarvisOrb';
+import type { JarvisState } from '../../lib/jarvis/voice-service';
 
-export default function StatusBar() {
+interface StatusBarProps {
+  jarvisState?: JarvisState;
+  isChatOpen?: boolean;
+  onToggleChat?: () => void;
+  onToggleMic?: () => void;
+  onOpenJarvisSettings?: () => void;
+}
+
+export default function StatusBar({
+  jarvisState = 'idle',
+  isChatOpen = false,
+  onToggleChat,
+  onToggleMic,
+  onOpenJarvisSettings,
+}: StatusBarProps) {
   const { invoke, isAvailable } = useTauri();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [time, setTime] = useState(new Date());
@@ -20,6 +36,8 @@ export default function StatusBar() {
 
   useEffect(() => {
     const fetchVitals = async () => {
+      // Skip polling when the app is hidden — saves IPC + CPU
+      if (document.hidden) return;
       if (isAvailable) {
         try {
           const info = await invoke<any>('get_system_info');
@@ -34,9 +52,14 @@ export default function StatusBar() {
       }
     };
 
+    const onVisible = () => { if (!document.hidden) fetchVitals(); };
+    document.addEventListener('visibilitychange', onVisible);
     fetchVitals();
     const interval = setInterval(fetchVitals, 5000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [isAvailable]);
 
   useEffect(() => {
@@ -85,10 +108,27 @@ export default function StatusBar() {
 
         <div style={{ flex: 1 }} />
 
-        {/* Center: Jarvis Indicator */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'rgba(0,0,0,0.3)', border: '1px solid var(--border-color)', borderRadius: 12, padding: '2px 8px' }}>
-          <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--accent-primary)', boxShadow: '0 0 6px var(--accent-primary)' }} className="animate-pulse" />
-          <span style={{ fontSize: 10, color: 'var(--text-primary)', letterSpacing: 1 }}>JARVIS: IDLE</span>
+        {/* Center: Jarvis Interactive Indicator */}
+        <div
+          onClick={onToggleChat}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            background: isChatOpen ? 'rgba(79,70,229,0.2)' : 'rgba(0,0,0,0.4)',
+            border: `1px solid ${isChatOpen ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+            borderRadius: 14,
+            padding: '2px 10px',
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+          }}
+          title="Нажмите для открытия чата Джарвиса"
+        >
+          <JarvisOrb state={jarvisState} size={14} />
+          <span style={{ fontSize: 10, color: 'var(--text-primary)', letterSpacing: 1, fontWeight: 600 }}>
+            JARVIS: {STATE_LABELS[jarvisState]}
+          </span>
+          <MessageSquare size={11} style={{ opacity: isChatOpen ? 1 : 0.6, color: 'var(--accent-primary)' }} />
         </div>
 
         <div style={{ flex: 1 }} />
@@ -108,6 +148,47 @@ export default function StatusBar() {
 
         {/* Right: Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {/* Quick Jarvis Mic Trigger */}
+          {onToggleMic && (
+            <button
+              onClick={onToggleMic}
+              style={{
+                background: jarvisState === 'listening' ? 'rgba(14,165,233,0.2)' : 'transparent',
+                border: `1px solid ${jarvisState === 'listening' ? '#0ea5e9' : 'var(--border-color)'}`,
+                borderRadius: 4,
+                padding: '3px 6px',
+                color: jarvisState === 'listening' ? '#0ea5e9' : 'var(--text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              title={jarvisState === 'listening' ? 'Остановить прослушивание' : 'Голосовой ввод Джарвиса'}
+            >
+              {jarvisState === 'listening' ? <MicOff size={12} /> : <Mic size={12} />}
+            </button>
+          )}
+
+          {/* Jarvis AI Settings */}
+          {onOpenJarvisSettings && (
+            <button
+              onClick={onOpenJarvisSettings}
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--border-color)',
+                borderRadius: 4,
+                padding: '3px 6px',
+                color: 'var(--accent-primary)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              title="Настройки ИИ Джарвиса"
+            >
+              <Bot size={12} />
+            </button>
+          )}
+
           <button
             onClick={toggleFullscreen}
             style={{

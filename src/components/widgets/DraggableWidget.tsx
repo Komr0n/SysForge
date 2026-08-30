@@ -14,6 +14,7 @@ interface DraggableWidgetProps {
   /** Place widget in a corner when no saved position exists */
   anchor?: 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left';
   width?: number;
+  height?: number;
   title?: string;
   children: React.ReactNode;
 }
@@ -24,6 +25,7 @@ export default function DraggableWidget({
   initialY = 16,
   anchor,
   width = 280,
+  height = 200,
   title,
   children,
 }: DraggableWidgetProps) {
@@ -66,7 +68,7 @@ export default function DraggableWidget({
       enableResizing={false}
       dragHandleClassName={title ? 'widget-drag-handle' : undefined}
       style={{
-        zIndex: 5,
+        zIndex: 5, // widgets live below windows (windows start at zIndex 1+ but are raised on focus)
         cursor: title ? 'default' : 'grab',
       }}
     >

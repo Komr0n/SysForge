@@ -13,11 +13,16 @@ export default defineConfig(async () => ({
   },
 
   build: {
+    chunkSizeWarningLimit: 800,
     rollupOptions: {
-      // When building as a plain web app (no Tauri), mark Tauri-only packages external
-      // so Rollup doesn't try to bundle them. In real Tauri builds the bundler
-      // doesn't use this path at all.
       external: ["@tauri-apps/plugin-store"],
+      output: {
+        manualChunks: {
+          three: ["three"],
+          icons: ["lucide-react"],
+          vendor: ["react", "react-dom", "zustand"],
+        },
+      },
     },
   },
 

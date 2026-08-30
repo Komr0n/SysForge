@@ -80,11 +80,12 @@ export default function Sidebar() {
   const [activeCategory, setActiveCategory] = useState('network');
   const windows = useWindowStore((s) => s.windows);
   const openWindow = useWindowStore((s) => s.openWindow);
-  const bringToFront = useWindowStore((s) => s.bringToFront);
+  const closeWindow = useWindowStore((s) => s.closeWindow);
 
+  // Toggle behavior: click once to open, click again to close
   const handleAppClick = (app: AppItem) => {
     if (windows.has(app.id)) {
-      bringToFront(app.id);
+      closeWindow(app.id);
     } else {
       openWindow(app.id, app.title, '', app.id);
     }
@@ -120,21 +121,35 @@ export default function Sidebar() {
 
       {/* App list */}
       <div style={{ flex: 1, overflow: 'auto', padding: '4px 0' }}>
-        {filteredApps.map((app) => (
-          <div
-            key={app.id}
-            className="sidebar-item"
-            onClick={() => handleAppClick(app)}
-            style={{
-              justifyContent: collapsed ? 'center' : 'flex-start',
-              padding: collapsed ? '8px 0' : '8px 14px',
-            }}
-            title={collapsed ? app.title : undefined}
-          >
-            <span style={{ color: 'var(--accent-secondary)' }}>{app.icon}</span>
-            {!collapsed && <span>{app.title}</span>}
-          </div>
-        ))}
+        {filteredApps.map((app) => {
+          const isOpen = windows.has(app.id);
+          return (
+            <div
+              key={app.id}
+              className={`sidebar-item ${isOpen ? 'active' : ''}`}
+              onClick={() => handleAppClick(app)}
+              style={{
+                justifyContent: collapsed ? 'center' : 'flex-start',
+                padding: collapsed ? '8px 0' : '8px 14px',
+                borderLeft: isOpen ? '2px solid var(--accent-primary)' : '2px solid transparent',
+                background: isOpen ? 'rgba(0, 255, 136, 0.08)' : undefined,
+              }}
+              title={collapsed ? `${app.title} (${isOpen ? 'Открыто — нажать чтобы закрыть' : 'Нажать чтобы открыть'})` : undefined}
+            >
+              <span style={{ color: isOpen ? 'var(--accent-primary)' : 'var(--accent-secondary)' }}>
+                {app.icon}
+              </span>
+              {!collapsed && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <span style={{ color: isOpen ? 'var(--accent-primary)' : undefined }}>{app.title}</span>
+                  {isOpen && (
+                    <span style={{ fontSize: 8, color: 'var(--accent-primary)', opacity: 0.8 }}>●</span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
 
       {/* Collapse toggle */}

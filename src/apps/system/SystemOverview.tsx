@@ -7,6 +7,7 @@ export interface SystemInfo {
   cpu_name: string;
   cpu_cores: number;
   cpu_usage: number;
+  cpus_usage?: number[];
   total_memory_bytes: number;
   used_memory_bytes: number;
   total_swap_bytes: number;
@@ -25,6 +26,7 @@ export function mockSystemInfo(): SystemInfo {
     cpu_name: '12th Gen Intel Core i7-12700H',
     cpu_cores: 14,
     cpu_usage: 20 + Math.random() * 50,
+    cpus_usage: Array.from({ length: 14 }, () => Math.floor(15 + Math.random() * 55)),
     total_memory_bytes: 32 * gb,
     used_memory_bytes: Math.floor((14 + Math.random() * 8) * gb),
     total_swap_bytes: 8 * gb,
@@ -75,11 +77,16 @@ export default function SystemOverview() {
       const result = await invoke<SystemInfo>('get_system_info');
       if (result) {
         setInfo(result);
-        setPerCore(Array.from({ length: result.cpu_cores }, () => 10 + Math.random() * 60));
+        if (result.cpus_usage && result.cpus_usage.length > 0) {
+          setPerCore(result.cpus_usage);
+        } else {
+          setPerCore(Array.from({ length: result.cpu_cores }, () => Math.round(result.cpu_usage)));
+        }
       }
     } else {
-      setInfo(mockSystemInfo());
-      setPerCore(Array.from({ length: 14 }, () => 10 + Math.random() * 60));
+      const mock = mockSystemInfo();
+      setInfo(mock);
+      setPerCore(mock.cpus_usage || []);
     }
   };
 

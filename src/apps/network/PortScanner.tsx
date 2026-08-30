@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { Button, Input, Select, Badge } from '../../components/ui';
+import { useTauri } from '../../hooks/useTauri';
 
 interface PortResult {
   port: number;
-  state: 'open' | 'closed';
+  state: 'open' | 'closed' | 'filtered';
   service: string;
 }
 
@@ -16,14 +17,19 @@ const SERVICES: Record<number, string> = {
   5900: 'VNC', 6379: 'Redis', 8080: 'HTTP-Alt', 8443: 'HTTPS-Alt', 27017: 'MongoDB',
 };
 
+/**
+ * PortScanner — real TCP connect() scan via Rust (desktop).
+ * Browser mode is disabled with an honest message (no fake results).
+ */
 export default function PortScanner() {
+  const { invoke, isAvailable } = useTauri();
   const [host, setHost] = useState('127.0.0.1');
-  const [range, setRange] = useState<[number, number]>([1, 100]);
+  const [range, setRange] = useState<[number, number]>([1, 1024]);
   const [preset, setPreset] = useState('common');
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
   const [results, setResults] = useState<PortResult[]>([]);
-  const [openCount, setOpenCount] = useState(0);
+  const [error, setError] = useState('');
 
   const getPorts = (): number[] => {
     switch (preset) {
@@ -31,8 +37,11 @@ export default function PortScanner() {
       case 'web': return WEB_PORTS;
       case 'range': {
         const [s, e] = range;
+        const lo = Math.max(1, Math.min(s, e));
+        const hi = Math.min(65535, Math.max(s, e));
+        if (hi - lo > 2048) return []; // too many — backend caps at 2048
         const arr: number[] = [];
-        for (let p = s; p <= Math.min(e, 10000); p++) arr.push(p);
+        for (let p = lo; p <= hi; p++) arr.push(p);
         return arr;
       }
       default: return COMMON_PORTS;
@@ -40,34 +49,59 @@ export default function PortScanner() {
   };
 
   const runScan = async () => {
+    setError('');
+    if (!isAvailable) {
+      setError('TCP scanning requires the desktop app — a browser cannot open raw sockets.');
+      return;
+    }
+    const ports = getPorts();
+    if (ports.length === 0) {
+      setError('Custom range too large (max 2048 ports per scan).');
+      return;
+    }
+    if (!host.trim()) return;
+
     setScanning(true);
     setResults([]);
-    setOpenCount(0);
-    setProgress(0);
-    const ports = getPorts();
-    const found: PortResult[] = [];
+    setProgress(10);
 
-    for (let i = 0; i < ports.length; i += 5) {
-      const chunk = ports.slice(i, i + 5);
-      for (const port of chunk) {
-        const isOpen = Math.random() < 0.18;
-        if (isOpen) {
-          found.push({ port, state: 'open', service: SERVICES[port] ?? 'unknown' });
+    try {
+      // Scan in chunks so progress updates
+      const chunkSize = 256;
+      const found: PortResult[] = [];
+      let closedCount = 0;
+      for (let i = 0; i < ports.length; i += chunkSize) {
+        const chunk = ports.slice(i, i + chunkSize);
+        const res = await invoke<{ port: number; open: boolean }[]>('scan_ports', {
+          host: host.trim(),
+          ports: chunk,
+          timeoutMs: 1200,
+        });
+        for (const r of res ?? []) {
+          if (r.open) {
+            found.push({ port: r.port, state: 'open', service: SERVICES[r.port] ?? 'unknown' });
+          } else {
+            closedCount++;
+          }
         }
+        setProgress(Math.round(((i + chunk.length) / ports.length) * 100));
+        // Interleave: show open ports first as they're found
+        setResults([...found].sort((a, b) => a.port - b.port));
       }
-      setProgress(Math.round(((i + chunk.length) / ports.length) * 100));
-      await new Promise((r) => setTimeout(r, 25));
+      setProgress(100);
+      if (found.length === 0) {
+        setResults([]); // no open ports; summary below communicates this
+      }
+      // store closed count in dataset attribute-ish state (kept simple)
+      setResults((prev) => prev.map((p) => ({ ...p })));
+      if (closedCount > 0 && found.length === 0) {
+        setError(`Scan complete: ${closedCount} ports closed/filtered, none open.`);
+      }
+    } catch (e) {
+      setError(`Scan failed: ${String(e)}`);
+    } finally {
+      setScanning(false);
     }
-
-    const closed = ports.filter((p) => !found.some((f) => f.port === p)).slice(0, 20).map((port) => ({
-      port,
-      state: 'closed' as const,
-      service: SERVICES[port] ?? '—',
-    }));
-
-    setResults([...found, ...closed].sort((a, b) => a.port - b.port));
-    setOpenCount(found.length);
-    setScanning(false);
   };
 
   const exportCsv = () => {
@@ -96,7 +130,7 @@ export default function PortScanner() {
             options={[
               { value: 'common', label: 'Common (top 20)' },
               { value: 'web', label: 'Web (80,443,8080,8443)' },
-              { value: 'range', label: 'Custom range' },
+              { value: 'range', label: 'Custom range (≤2048)' },
             ]}
           />
         </div>
@@ -111,63 +145,57 @@ export default function PortScanner() {
           </div>
         )}
         <Button variant="primary" onClick={runScan} disabled={scanning} style={{ marginBottom: 8 }}>
-          {scanning ? 'Scanning...' : 'Scan'}
+          {scanning ? `Scanning… ${progress}%` : 'Scan'}
         </Button>
         {results.length > 0 && (
           <Button variant="secondary" onClick={exportCsv} style={{ marginBottom: 8 }}>Export CSV</Button>
         )}
       </div>
 
-      {scanning && (
-        <div>
-          <div style={{ height: 4, background: 'rgba(0,255,136,0.1)', borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{ height: '100%', width: `${progress}%`, background: 'var(--accent-primary)', boxShadow: '0 0 8px var(--accent-primary)', transition: 'width 0.2s' }} />
-          </div>
-          <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', marginTop: 4 }}>SCANNING... {progress}%</div>
+      {error && <div style={{ color: 'var(--danger)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>{error}</div>}
+      {!isAvailable && !error && (
+        <div style={{ color: '#f59e0b', fontSize: 11, fontFamily: 'var(--font-mono)' }}>
+          ⚠ Real scanning requires the desktop app.
         </div>
       )}
 
-      {!scanning && results.length > 0 && (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Badge color="#00ff88">{openCount} OPEN</Badge>
-          <Badge color="#64748b">{results.length - openCount} CLOSED</Badge>
-          <Badge color="#0ea5e9">{host}</Badge>
-        </div>
-      )}
-
+      {/* Results */}
       <div style={{ flex: 1, overflow: 'auto' }}>
         {results.length > 0 ? (
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
             <thead>
               <tr style={{ color: 'var(--text-muted)', textAlign: 'left' }}>
-                <th style={thStyle}>Port</th>
-                <th style={thStyle}>State</th>
-                <th style={thStyle}>Service</th>
+                <th style={{ padding: '4px 8px' }}>Port</th>
+                <th style={{ padding: '4px 8px' }}>State</th>
+                <th style={{ padding: '4px 8px' }}>Service</th>
               </tr>
             </thead>
             <tbody>
               {results.map((r) => (
                 <tr key={r.port} style={{ borderTop: '1px solid var(--border-color)' }}>
-                  <td style={tdStyle}><span style={{ fontFamily: 'var(--font-mono)' }}>{r.port}</span></td>
-                  <td style={tdStyle}>
-                    <Badge color={r.state === 'open' ? '#00ff88' : '#64748b'}>
-                      {r.state.toUpperCase()}
-                    </Badge>
+                  <td style={{ padding: '4px 8px', fontFamily: 'var(--font-mono)' }}>{r.port}</td>
+                  <td style={{ padding: '4px 8px' }}>
+                    <Badge color={r.state === 'open' ? '#00ff88' : '#ef4444'}>{r.state.toUpperCase()}</Badge>
                   </td>
-                  <td style={tdStyle}><span style={{ fontFamily: 'var(--font-mono)', color: r.state === 'open' ? 'var(--text-primary)' : 'var(--text-muted)' }}>{r.service}</span></td>
+                  <td style={{ padding: '4px 8px', fontFamily: 'var(--font-mono)' }}>{r.service}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
-            {scanning ? 'Scanning...' : 'Configure and run a scan to see results'}
-          </div>
+          !scanning && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: 12, fontFamily: 'var(--font-mono)' }}>
+              {progress === 100 && !error ? 'No open ports found.' : 'Enter host and press Scan'}
+            </div>
+          )
         )}
       </div>
+
+      {results.length > 0 && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          {results.length} OPEN PORT{results.length !== 1 ? 'S' : ''} · TARGET {host}
+        </div>
+      )}
     </div>
   );
 }
-
-const thStyle: React.CSSProperties = { padding: '4px 8px', fontWeight: 600, fontSize: 10, textTransform: 'uppercase', letterSpacing: 1 };
-const tdStyle: React.CSSProperties = { padding: '6px 8px' };

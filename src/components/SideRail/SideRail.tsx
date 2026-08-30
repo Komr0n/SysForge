@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import ActivityHistory from '../widgets/ActivityHistory';
+import GlobeWidget from '../widgets/GlobeWidget';
 import NetworkMonitor from '../widgets/NetworkMonitor';
 import AudioVisualizer from '../widgets/AudioVisualizer';
 import { ChevronRight, ChevronLeft } from 'lucide-react';
@@ -7,14 +7,14 @@ import { useSettingsStore } from '../../store/settingsStore';
 
 /**
  * SideRail — right-side instruments panel.
- * Width 256px expanded, 24px when collapsed.
- * All child widgets are fluid (fill 100% width).
+ * Width 256px expanded, 22px when collapsed.
+ * Houses 3D Globe, Network Monitor, and Audio Visualizer.
  */
 export default function SideRail() {
   const [collapsed, setCollapsed] = useState(false);
   const widgets = useSettingsStore((s) => s.widgets);
 
-  const anyVisible = widgets.audioVisualizer || widgets.networkMonitor || widgets.activityHistory;
+  const anyVisible = widgets.globe || widgets.audioVisualizer || widgets.networkMonitor;
 
   if (collapsed) {
     return (
@@ -100,9 +100,9 @@ export default function SideRail() {
 
       {/* Widgets body — scrollable, each widget fills full width */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
-        {widgets.audioVisualizer && (
-          <div style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.15)' }}>
-            <AudioVisualizer />
+        {widgets.globe && (
+          <div style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.2)' }}>
+            <GlobeWidget />
           </div>
         )}
         {widgets.networkMonitor && (
@@ -110,9 +110,9 @@ export default function SideRail() {
             <NetworkMonitor />
           </div>
         )}
-        {widgets.activityHistory && (
-          <div style={{ background: 'rgba(0,0,0,0.1)' }}>
-            <ActivityHistory />
+        {widgets.audioVisualizer && (
+          <div style={{ background: 'rgba(0,0,0,0.15)' }}>
+            <AudioVisualizer />
           </div>
         )}
       </div>

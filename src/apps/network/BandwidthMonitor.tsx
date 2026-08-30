@@ -1,47 +1,57 @@
 import { useState, useEffect } from 'react';
 import { useTauri } from '../../hooks/useTauri';
 
+interface InterfaceStats {
+  name: string;
+  rx_bytes_per_sec: number;
+  tx_bytes_per_sec: number;
+  total_rx_bytes: number;
+  total_tx_bytes: number;
+}
+
 export default function BandwidthMonitor() {
   const { invoke, isAvailable } = useTauri();
-  const [downloadSpeed, setDownloadSpeed] = useState<number>(45.2);
-  const [uploadSpeed, setUploadSpeed] = useState<number>(12.8);
-  const [totalRx, setTotalRx] = useState<number>(1.4); // GB
-  const [totalTx, setTotalTx] = useState<number>(0.6); // GB
+  const [downloadSpeed, setDownloadSpeed] = useState<number>(0);
+  const [uploadSpeed, setUploadSpeed] = useState<number>(0);
+  const [totalRx, setTotalRx] = useState<number>(0); // GB
+  const [totalTx, setTotalTx] = useState<number>(0); // GB
   const [testing, setTesting] = useState(false);
-  const [interfaces, setInterfaces] = useState<string[]>(['eth0 (Ethernet)', 'wlan0 (Wi-Fi)']);
-  const [selectedIf, setSelectedIf] = useState<string>('eth0 (Ethernet)');
+  const [interfaces, setInterfaces] = useState<string[]>([]);
+  const [selectedIf, setSelectedIf] = useState<string>('');
 
   useEffect(() => {
     if (isAvailable) {
-      invoke<any>('get_system_info').then((info) => {
-        if (info && info.network_interfaces) {
-          setInterfaces(info.network_interfaces);
-          if (info.network_interfaces.length > 0) {
-            setSelectedIf(info.network_interfaces[0]);
-          }
+      invoke<{ interfaces: InterfaceStats[] }>('get_network_stats').then((stats) => {
+        if (stats?.interfaces) {
+          const names = stats.interfaces.map((i) => i.name).filter((n) => !/^lo/i.test(n));
+          setInterfaces(names);
+          if (names.length > 0) setSelectedIf(names[0]);
         }
       }).catch(() => {});
+      return;
     }
+    setInterfaces(['(browser mode — no data)']);
   }, [isAvailable]);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      setDownloadSpeed((prev) => Math.max(1, +(prev + (Math.random() - 0.48) * 10).toFixed(1)));
-      setUploadSpeed((prev) => Math.max(0.5, +(prev + (Math.random() - 0.48) * 4).toFixed(1)));
-      setTotalRx((prev) => +(prev + 0.002).toFixed(3));
-      setTotalTx((prev) => +(prev + 0.0008).toFixed(3));
-    }, 1500);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  const runSpeedTest = async () => {
-    setTesting(true);
-    await new Promise((r) => setTimeout(r, 2000));
-    setDownloadSpeed(88.4);
-    setUploadSpeed(32.1);
-    setTesting(false);
-  };
+    if (!isAvailable) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const stats = await invoke<{ interfaces: InterfaceStats[] }>('get_network_stats');
+        if (!stats?.interfaces || cancelled) return;
+        const itf = stats.interfaces.find((i) => i.name === selectedIf) ?? stats.interfaces.find((i) => !/^lo/i.test(i.name));
+        if (!itf) return;
+        setDownloadSpeed(+((itf.rx_bytes_per_sec * 8) / 1e6).toFixed(1)); // Mbps
+        setUploadSpeed(+((itf.tx_bytes_per_sec * 8) / 1e6).toFixed(1));
+        setTotalRx(+(itf.total_rx_bytes / 1e9).toFixed(3)); // GB
+        setTotalTx(+(itf.total_tx_bytes / 1e9).toFixed(3));
+      } catch { /* retry */ }
+    };
+    poll();
+    const interval = setInterval(poll, 1500);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isAvailable, selectedIf]);
 
   return (
     <div style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 14, height: '100%', fontFamily: 'var(--font-mono)', fontSize: 12 }}>
@@ -69,8 +79,21 @@ export default function BandwidthMonitor() {
           </select>
         </div>
         <button
-          onClick={runSpeedTest}
-          disabled={testing}
+          onClick={async () => {
+            // Honest speed test: download a known payload and measure real throughput
+            setTesting(true);
+            try {
+              const url = 'https://speed.cloudflare.com/__down?bytes=5000000';
+              const t0 = performance.now();
+              const res = await fetch(url, { cache: 'no-store' });
+              const buf = await res.arrayBuffer();
+              const secs = (performance.now() - t0) / 1000;
+              const mbps = (buf.byteLength * 8) / secs / 1e6;
+              setDownloadSpeed(+mbps.toFixed(1));
+            } catch { /* offline or CSP-blocked */ }
+            setTesting(false);
+          }}
+          disabled={testing || !isAvailable}
           style={{
             background: testing ? 'rgba(100,116,139,0.3)' : 'var(--accent-primary)',
             color: testing ? 'var(--text-muted)' : '#000',

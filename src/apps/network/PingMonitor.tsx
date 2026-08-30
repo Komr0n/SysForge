@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback } from 'react';
 import { Button, Input, Select, Badge, Card } from '../../components/ui';
 import { useInterval } from '../../hooks/useInterval';
+import { useTauri } from '../../hooks/useTauri';
 
 interface PingEntry {
   id: string;
@@ -15,6 +16,30 @@ interface PingEntry {
 
 let pingId = 0;
 
+/** Parse latency (ms) out of a native ping output line. */
+function parseLatency(output: string): number | null {
+  // Windows: "Minimum = 3ms" or "Average = 5ms"; also "time=12ms" / "time<1ms"
+  const winAvg = output.match(/(?:Minimum|Minimum\/Average)[^=\n]*=\s*([\d.]+)\s*ms/i);
+  if (winAvg) return parseFloat(winAvg[1]);
+  const timeMatch = output.match(/time[=<]\s*([\d.]+)\s*ms/i);
+  if (timeMatch) return parseFloat(timeMatch[1]);
+  // Linux: "avg = 12.3/45.6/78.9 ms" or "time 12.3 ms"
+  const linuxAvg = output.match(/=\s*[\d.]+\/([\d.]+)\/[\d.]+\s*ms/);
+  if (linuxAvg) return parseFloat(linuxAvg[1]);
+  const mdev = output.match(/time\s+([\d.]+)\s*ms/);
+  if (mdev) return parseFloat(mdev[1]);
+  return null;
+}
+
+function isPingSuccess(output: string): boolean {
+  const o = output.toLowerCase();
+  if (o.includes('ttl=')) return true;              // Windows/Linux replies
+  if (o.includes('bytes from') && !o.includes('unreachable')) return true;
+  if (o.includes('average') && !o.includes('(0% loss)') === false && o.includes('lost = 0')) return true;
+  if (o.includes('0% packet loss') || o.includes('0 packets transmitted')) return false;
+  return /received = [1-9]/.test(o);                // Linux summary
+}
+
 function simulatePing(host: string): Promise<number> {
   return new Promise((resolve) => {
     const base = host.length * 5 + Math.random() * 60;
@@ -25,6 +50,7 @@ function simulatePing(host: string): Promise<number> {
 }
 
 export default function PingMonitor() {
+  const { invoke, isAvailable } = useTauri();
   const [hosts, setHosts] = useState<string[]>(['8.8.8.8']);
   const [hostInput, setHostInput] = useState('');
   const [intervalMs, setIntervalMs] = useState(2000);
@@ -32,37 +58,55 @@ export default function PingMonitor() {
   const [paused, setPaused] = useState(false);
   const [runningCount, setRunningCount] = useState(0);
 
+  // Rolling counters instead of derived loss — accurate and stable
+  const statsRef = useRef<Record<string, { sent: number; lost: number }>>({});
+
   const pingAll = useCallback(async () => {
-    if (paused) return;
+    if (paused || document.hidden) return;
     const results: PingEntry[] = await Promise.all(
       hosts.map(async (host) => {
+        const prev = entries[host];
+        const st = (statsRef.current[host] ??= { sent: 0, lost: 0 });
+        let ok = false;
+        let latency = 0;
         try {
-          const latency = await simulatePing(host);
-          const prev = entries[host];
-          const history = [...(prev?.history ?? []), latency].slice(-30);
-          return {
-            id: `row-${pingId++}`,
-            host,
-            latency,
-            success: true,
-            min: prev ? Math.min(prev.min, latency) : latency,
-            max: prev ? Math.max(prev.max, latency) : latency,
-            loss: prev ? prev.loss : 0,
-            history,
-          };
-        } catch {
-          const prev = entries[host];
-          return {
-            id: `row-${pingId++}`,
-            host,
-            latency: null,
-            success: false,
-            min: prev?.min ?? 0,
-            max: prev?.max ?? 0,
-            loss: Math.min(100, (prev?.loss ?? 0) + 20),
-            history: [...(prev?.history ?? []), -1].slice(-30),
-          };
-        }
+          if (isAvailable) {
+            const out = await invoke<string>('ping_host', { host, count: 1 });
+            if (out && isPingSuccess(out)) {
+              ok = true;
+              latency = parseLatency(out) ?? 0;
+            }
+          } else {
+            ok = true;
+            latency = await simulatePing(host);
+          }
+        } catch { ok = false; }
+
+        st.sent += 1;
+        if (!ok) st.lost += 1;
+        const lossPct = st.sent > 0 ? Math.round((st.lost / st.sent) * 100) : 0;
+
+        return ok
+          ? {
+              id: `row-${pingId++}`,
+              host,
+              latency,
+              success: true,
+              min: prev ? Math.min(prev.min, latency) : latency,
+              max: prev ? Math.max(prev.max, latency) : latency,
+              loss: lossPct,
+              history: [...(prev?.history ?? []), latency].slice(-30),
+            }
+          : {
+              id: `row-${pingId++}`,
+              host,
+              latency: null,
+              success: false,
+              min: prev?.min ?? 0,
+              max: prev?.max ?? 0,
+              loss: lossPct,
+              history: [...(prev?.history ?? []), -1].slice(-30),
+            };
       })
     );
 
@@ -70,9 +114,9 @@ export default function PingMonitor() {
     const next: Record<string, PingEntry> = {};
     results.forEach((r) => (next[r.host] = r));
     setEntries((prev) => ({ ...prev, ...next }));
-  }, [hosts, entries, paused]);
+  }, [hosts, entries, paused, isAvailable]);
 
-  useInterval(pingAll, intervalMs);
+  useInterval(pingAll, paused ? null : intervalMs);
 
   const addHost = () => {
     const h = hostInput.trim();
@@ -84,6 +128,7 @@ export default function PingMonitor() {
 
   const removeHost = (host: string) => {
     setHosts(hosts.filter((h) => h !== host));
+    delete statsRef.current[host];
     setEntries((prev) => {
       const next = { ...prev };
       delete next[host];

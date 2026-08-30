@@ -673,11 +673,13 @@ html, body, #root {
 }
 
 .clock-time {
-  font-size: 48px;
+  font-size: 38px;
   font-weight: 300;
   color: var(--text-primary);
   text-shadow: 0 0 20px rgba(0, 255, 136, 0.15);
-  letter-spacing: 4px;
+  letter-spacing: 2px;
+  line-height: 1.1;
+  white-space: nowrap;
 }
 
 .clock-date {

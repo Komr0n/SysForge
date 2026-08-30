@@ -289,7 +289,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                     {([
-                      { key: 'cpuRamGraph' as const, label: 'CPU/RAM Graph', desc: '60-second rolling performance chart' },
                       { key: 'systemVitals' as const, label: 'System Vitals', desc: 'Concentric rings: CPU / RAM / Disk / FPS' },
                       { key: 'miniTerminal' as const, label: 'Mini Terminal', desc: 'Interactive shell — type commands here' },
                     ]).map((w) => (
@@ -307,7 +306,6 @@ export default function SettingsPanel({ open, onClose }: SettingsPanelProps) {
                     {([
                       { key: 'networkMonitor' as const, label: 'Network Monitor', desc: 'Live upload / download traffic graph' },
                       { key: 'audioVisualizer' as const, label: 'Audio Spectrum', desc: 'Animated frequency-bar equalizer' },
-                      { key: 'activityHistory' as const, label: 'Activity History', desc: 'CPU usage by weekday or month' },
                     ]).map((w) => (
                       <ToggleRow key={w.key} label={w.label} desc={w.desc} value={widgets[w.key]} onChange={() => toggleWidget(w.key)} />
                     ))}

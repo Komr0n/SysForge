@@ -7,6 +7,126 @@ interface GlobeWidgetProps {
   style?: React.CSSProperties;
 }
 
+/**
+ * Generate a procedural high-tech sci-fi Earth texture on an offscreen canvas.
+ * Fully self-contained — no external image files or 404s.
+ */
+function createProceduralEarthTexture(): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1024;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d')!;
+
+  // Deep space / ocean background
+  ctx.fillStyle = '#020612';
+  ctx.fillRect(0, 0, 1024, 512);
+
+  // Lat / Long subtle coordinate grid
+  ctx.strokeStyle = 'rgba(14, 165, 233, 0.08)';
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= 1024; x += 64) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 512); ctx.stroke();
+  }
+  for (let y = 0; y <= 512; y += 32) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(1024, y); ctx.stroke();
+  }
+
+  // Continent outlines & shapes in equirectangular projection (0..1024 x 0..512)
+  const drawLandmass = (pts: [number, number][], fillColor: string, strokeColor: string) => {
+    ctx.beginPath();
+    pts.forEach(([x, y], i) => {
+      const px = (x / 360) * 1024;
+      const py = (y / 180) * 512;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    });
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  };
+
+  const landFill = 'rgba(14, 165, 233, 0.22)';
+  const landStroke = '#00ff88';
+
+  // North America
+  drawLandmass([
+    [40, 20], [80, 15], [100, 30], [110, 45], [95, 65], [85, 75],
+    [70, 70], [60, 60], [45, 50], [30, 30]
+  ], landFill, landStroke);
+
+  // South America
+  drawLandmass([
+    [80, 75], [95, 80], [110, 95], [105, 130], [90, 155], [80, 160],
+    [75, 140], [70, 105], [75, 85]
+  ], landFill, landStroke);
+
+  // Eurasia (Europe + Asia)
+  drawLandmass([
+    [160, 25], [180, 20], [210, 22], [260, 20], [310, 25], [320, 50],
+    [300, 65], [280, 75], [250, 70], [220, 65], [190, 60], [170, 50], [155, 35]
+  ], landFill, landStroke);
+
+  // Africa
+  drawLandmass([
+    [165, 55], [195, 55], [215, 75], [210, 115], [195, 145], [180, 140],
+    [165, 105], [155, 75]
+  ], landFill, landStroke);
+
+  // Australia
+  drawLandmass([
+    [290, 110], [325, 105], [335, 125], [325, 145], [295, 140], [285, 125]
+  ], landFill, landStroke);
+
+  // Antarctica
+  drawLandmass([
+    [20, 170], [100, 168], [200, 172], [300, 168], [340, 172], [350, 180],
+    [10, 180]
+  ], 'rgba(14, 165, 233, 0.15)', '#38bdf8');
+
+  // Sci-fi dot matrix over landmasses
+  ctx.fillStyle = '#00ff88';
+  for (let x = 16; x < 1024; x += 16) {
+    for (let y = 16; y < 512; y += 16) {
+      const p = ctx.getImageData(x, y, 1, 1).data;
+      if (p[0] > 0 || p[1] > 40 || p[2] > 40) {
+        ctx.fillRect(x - 1, y - 1, 2, 2);
+      }
+    }
+  }
+
+  // Glowing city nodes on map
+  const cities: [number, number, string][] = [
+    [75, 48, '#00ff88'],   // NYC
+    [175, 38, '#0ea5e9'],  // London
+    [310, 45, '#f59e0b'],  // Tokyo
+    [295, 88, '#00ff88'],  // Singapore
+    [190, 68, '#c084fc'],  // Dubai
+    [95, 130, '#0ea5e9'],  // Sao Paulo
+    [330, 135, '#00ff88'], // Sydney
+  ];
+
+  cities.forEach(([cx, cy, col]) => {
+    const px = (cx / 360) * 1024;
+    const py = (cy / 180) * 512;
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.shadowColor = col;
+    ctx.shadowBlur = 8;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  });
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.RepeatWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  return texture;
+}
+
 export default function GlobeWidget({ style }: GlobeWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const fpsCap = useSettingsStore((s) => s.performance.fpsCap);
@@ -16,15 +136,12 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
     if (reduceMotion || !containerRef.current) return;
 
     const container = containerRef.current;
-    const width = 300;
-    const height = 300;
+    const width = container.clientWidth || 254;
+    const height = 220;
 
     let renderer: THREE.WebGLRenderer;
     try {
-      renderer = new THREE.WebGLRenderer({
-        alpha: true,
-        antialias: true,
-      });
+      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
       renderer.setClearColor(0x000000, 0);
       renderer.setSize(width, height);
@@ -33,260 +150,193 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
       return;
     }
     container.appendChild(renderer.domElement);
+    const canvas = renderer.domElement;
+    canvas.style.pointerEvents = 'auto';
+    canvas.style.cursor = 'grab';
+    canvas.style.display = 'block';
+    canvas.style.width = '100%';
+    canvas.style.height = `${height}px`;
 
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
     camera.position.z = 3.2;
 
-    // Ambient lighting for atmosphere
-    const ambientLight = new THREE.AmbientLight(0x0ea5e9, 0.3);
-    scene.add(ambientLight);
+    scene.add(new THREE.AmbientLight(0xbfdcff, 1.1));
+    const sun = new THREE.DirectionalLight(0x00ff88, 1.2);
+    sun.position.set(-2, 1.5, 2.5);
+    scene.add(sun);
+    const rim = new THREE.DirectionalLight(0x0ea5e9, 1.0);
+    rim.position.set(3, -1, -2);
+    scene.add(rim);
 
-    // Create wireframe sphere — higher detail
-    const sphereGeo = new THREE.SphereGeometry(1, 40, 40);
-    const sphereMat = new THREE.MeshBasicMaterial({
-      wireframe: true,
-      color: 0x0ea5e9,
-      transparent: true,
-      opacity: 0.12,
+    const globeGroup = new THREE.Group();
+    scene.add(globeGroup);
+
+    // ── Procedural Textured Earth ──
+    const earthTex = createProceduralEarthTexture();
+    const earthMat = new THREE.MeshPhongMaterial({
+      map: earthTex,
+      shininess: 15,
+      specular: new THREE.Color(0x0ea5e9),
+      emissive: new THREE.Color(0x021526),
+      emissiveIntensity: 0.4,
     });
-    const sphere = new THREE.Mesh(sphereGeo, sphereMat);
-    scene.add(sphere);
+    const earthMesh = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 48), earthMat);
+    globeGroup.add(earthMesh);
 
-    // Atmosphere glow shell
-    const atmosGeo = new THREE.SphereGeometry(1.08, 32, 32);
+    // Outer HUD Graticule wireframe sphere
+    const wireGeo = new THREE.SphereGeometry(1.02, 24, 24);
+    const wireMat = new THREE.MeshBasicMaterial({
+      wireframe: true, color: 0x0ea5e9, transparent: true, opacity: 0.12,
+    });
+    const wireSphere = new THREE.Mesh(wireGeo, wireMat);
+    globeGroup.add(wireSphere);
+
+    // Atmosphere halo
     const atmosMat = new THREE.MeshBasicMaterial({
-      color: 0x0ea5e9,
-      transparent: true,
-      opacity: 0.03,
-      side: THREE.BackSide,
+      color: 0x0ea5e9, transparent: true, opacity: 0.1, side: THREE.BackSide,
     });
-    const atmosphere = new THREE.Mesh(atmosGeo, atmosMat);
-    scene.add(atmosphere);
+    const atmosphere = new THREE.Mesh(new THREE.SphereGeometry(1.12, 32, 32), atmosMat);
+    globeGroup.add(atmosphere);
 
-    // Latitude lines — brighter grid
-    const latLines: THREE.Line[] = [];
-    for (let lat = -80; lat <= 80; lat += 20) {
-      const points: THREE.Vector3[] = [];
-      const phi = (90 - lat) * (Math.PI / 180);
-      for (let lng = 0; lng <= 360; lng += 3) {
-        const theta = lng * (Math.PI / 180);
-        const x = Math.sin(phi) * Math.cos(theta);
-        const y = Math.cos(phi);
-        const z = Math.sin(phi) * Math.sin(theta);
-        points.push(new THREE.Vector3(x, y, z));
-      }
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({
-        color: lat === 0 ? 0x00ff88 : 0x0ea5e9,
-        transparent: true,
-        opacity: lat === 0 ? 0.25 : 0.1,
-      });
-      const line = new THREE.Line(geo, mat);
-      scene.add(line);
-      latLines.push(line);
+    // ── Orbiting Satellites with glowing trails ──
+    interface Satellite {
+      mesh: THREE.Mesh;
+      ring: THREE.Line;
+      trail: THREE.Line;
+      trailPositions: Float32Array;
+      speed: number; radius: number; tiltX: number; tiltZ: number; phase: number;
     }
+    const satellites: Satellite[] = [];
+    const satGeo = new THREE.OctahedronGeometry(0.035);
+    const TRAIL_LEN = 20;
 
-    // Longitude lines
-    const lngLines: THREE.Line[] = [];
-    for (let lng = 0; lng < 360; lng += 20) {
-      const points: THREE.Vector3[] = [];
-      for (let lat = -90; lat <= 90; lat += 3) {
-        const phi = (90 - lat) * (Math.PI / 180);
-        const theta = lng * (Math.PI / 180);
-        const x = Math.sin(phi) * Math.cos(theta);
-        const y = Math.cos(phi);
-        const z = Math.sin(phi) * Math.sin(theta);
-        points.push(new THREE.Vector3(x, y, z));
-      }
-      const geo = new THREE.BufferGeometry().setFromPoints(points);
-      const mat = new THREE.LineBasicMaterial({
-        color: lng === 0 ? 0x00ff88 : 0x0ea5e9,
-        transparent: true,
-        opacity: lng === 0 ? 0.25 : 0.1,
-      });
-      const line = new THREE.Line(geo, mat);
-      scene.add(line);
-      lngLines.push(line);
-    }
-
-    // Random "city" glow dots on the globe surface
-    const glowLines: THREE.Line[] = [];
-    const cityPoints = [
-      { lat: 40.7, lng: -74 },    // New York
-      { lat: 51.5, lng: -0.1 },    // London
-      { lat: 35.7, lng: 139.7 },  // Tokyo
-      { lat: -33.9, lng: 151.2 }, // Sydney
-      { lat: 55.8, lng: 37.6 },   // Moscow
-      { lat: 22.3, lng: 114.2 },  // Hong Kong
-      { lat: -23.5, lng: -46.6 }, // São Paulo
-      { lat: 1.3, lng: 103.8 },   // Singapore
-      { lat: 48.9, lng: 2.35 },   // Paris
-      { lat: 37.6, lng: 127 },    // Seoul
-      { lat: 28.6, lng: 77.2 },   // Delhi
-      { lat: -1.3, lng: 36.8 },   // Nairobi
+    const satSpecs = [
+      { radius: 1.35, speed: 0.65, color: 0x00ff88 },
+      { radius: 1.5, speed: -0.45, color: 0x0ea5e9 },
+      { radius: 1.65, speed: 0.35, color: 0xf59e0b },
+      { radius: 1.8, speed: -0.22, color: 0xc084fc },
     ];
 
-    for (const city of cityPoints) {
-      const phi = (90 - city.lat) * (Math.PI / 180);
-      const theta = city.lng * (Math.PI / 180);
-      const x = Math.sin(phi) * Math.cos(theta);
-      const y = Math.cos(phi);
-      const z = Math.sin(phi) * Math.sin(theta);
+    satSpecs.forEach((spec, i) => {
+      // Orbit ring
+      const ringPts: THREE.Vector3[] = [];
+      for (let a = 0; a <= 96; a++) {
+        const ang = (a / 96) * Math.PI * 2;
+        ringPts.push(new THREE.Vector3(Math.cos(ang) * spec.radius, 0, Math.sin(ang) * spec.radius));
+      }
+      const ringMat = new THREE.LineBasicMaterial({ color: spec.color, transparent: true, opacity: 0.18 });
+      const ring = new THREE.Line(new THREE.BufferGeometry().setFromPoints(ringPts), ringMat);
+      ring.rotation.x = (i * 0.45) - 0.6;
+      ring.rotation.z = (i * 0.35) - 0.4;
+      globeGroup.add(ring);
 
-      // Small glow spike
-      const spikePoints = [
-        new THREE.Vector3(x * 1.0, y * 1.0, z * 1.0),
-        new THREE.Vector3(x * 1.15, y * 1.15, z * 1.15),
-      ];
-      const spikeGeo = new THREE.BufferGeometry().setFromPoints(spikePoints);
-      const spikeMat = new THREE.LineBasicMaterial({
-        color: 0x00ff88,
-        transparent: true,
-        opacity: 0.4,
+      // Satellite mesh
+      const satMeshMat = new THREE.MeshBasicMaterial({ color: spec.color });
+      const mesh = new THREE.Mesh(satGeo, satMeshMat);
+      globeGroup.add(mesh);
+
+      // Trail
+      const trailPositions = new Float32Array(TRAIL_LEN * 3);
+      const trailGeo = new THREE.BufferGeometry();
+      trailGeo.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+      const trailMat = new THREE.LineBasicMaterial({ color: spec.color, transparent: true, opacity: 0.4 });
+      const trail = new THREE.Line(trailGeo, trailMat);
+      globeGroup.add(trail);
+
+      satellites.push({
+        mesh, ring, trail, trailPositions,
+        speed: spec.speed, radius: spec.radius,
+        tiltX: ring.rotation.x, tiltZ: ring.rotation.z,
+        phase: (i / satSpecs.length) * Math.PI * 2,
       });
-      const spikeLine = new THREE.Line(spikeGeo, spikeMat);
-      scene.add(spikeLine);
-      glowLines.push(spikeLine);
-
-      // City dot
-      const dotGeo = new THREE.SphereGeometry(0.015, 6, 6);
-      const dotMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
-      const dot = new THREE.Mesh(dotGeo, dotMat);
-      dot.position.set(x, y, z);
-      scene.add(dot);
-    }
-
-    // Orbiting signal dots with trails
-    const orbitDots: { mesh: THREE.Mesh; speed: number; tilt: number; phase: number }[] = [];
-    const dotGeo = new THREE.SphereGeometry(0.025, 8, 8);
-    const dotMat = new THREE.MeshBasicMaterial({
-      color: 0x00ff88,
-      transparent: true,
-      opacity: 0.9,
     });
 
-    for (let i = 0; i < 8; i++) {
-      const dot = new THREE.Mesh(dotGeo, dotMat.clone());
-      scene.add(dot);
-      orbitDots.push({
-        mesh: dot,
-        speed: 0.3 + Math.random() * 0.4,
-        tilt: (Math.PI / 6) * (Math.random() - 0.5),
-        phase: Math.random() * Math.PI * 2,
-      });
-    }
-
-    // Mouse interaction state
-    const rotationRef = { x: 0.2, y: 0 };
+    // ── Interaction: drag rotate / wheel zoom / dblclick reset ──
+    const rotationRef = { x: 0.25, y: 0 };
+    const zoomRef = { z: 3.2 };
     const mouseRef = { isDown: false, lastX: 0, lastY: 0 };
-    const velocityRef = { vx: 0.003, vy: 0 };
+    const velocityRef = { vx: 0.002, vy: 0 };
 
-    const handleMouseDown = (e: MouseEvent) => {
+    const onMouseDown = (e: MouseEvent) => {
       mouseRef.isDown = true;
       mouseRef.lastX = e.clientX;
       mouseRef.lastY = e.clientY;
+      canvas.style.cursor = 'grabbing';
     };
-
-    const handleMouseMove = (e: MouseEvent) => {
+    const onMouseMove = (e: MouseEvent) => {
       if (!mouseRef.isDown) return;
       const dx = e.clientX - mouseRef.lastX;
       const dy = e.clientY - mouseRef.lastY;
+      velocityRef.vx = dx * 0.007;
+      velocityRef.vy = dy * 0.007;
+      rotationRef.y += dx * 0.007;
+      rotationRef.x += dy * 0.007;
+      rotationRef.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, rotationRef.x));
       mouseRef.lastX = e.clientX;
       mouseRef.lastY = e.clientY;
-      velocityRef.vx = dx * 0.008;
-      velocityRef.vy = dy * 0.008;
     };
-
-    const handleMouseUp = () => {
+    const onMouseUpWindow = () => {
       mouseRef.isDown = false;
+      canvas.style.cursor = 'grab';
     };
-
-    // Mouse wheel zoom
-    const handleWheel = (e: WheelEvent) => {
+    const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      camera.position.z = Math.max(2, Math.min(6, camera.position.z + e.deltaY * 0.002));
+      zoomRef.z = Math.max(1.8, Math.min(5.5, zoomRef.z + e.deltaY * 0.0025));
+    };
+    const onDblClick = () => {
+      rotationRef.x = 0.25;
+      rotationRef.y = 0;
+      zoomRef.z = 3.2;
+      velocityRef.vx = 0.002;
+      velocityRef.vy = 0;
     };
 
-    const canvas = renderer.domElement;
-    canvas.addEventListener('mousedown', handleMouseDown);
-    canvas.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUpWindow);
+    canvas.addEventListener('wheel', onWheel, { passive: false });
+    canvas.addEventListener('dblclick', onDblClick);
 
-    // Touch support
-    const handleTouchStart = (e: TouchEvent) => {
-      if (e.touches.length === 1) {
-        mouseRef.isDown = true;
-        mouseRef.lastX = e.touches[0].clientX;
-        mouseRef.lastY = e.touches[0].clientY;
-      }
-    };
-
-    const handleTouchMove = (e: TouchEvent) => {
-      if (!mouseRef.isDown || e.touches.length !== 1) return;
-      e.preventDefault();
-      const dx = e.touches[0].clientX - mouseRef.lastX;
-      const dy = e.touches[0].clientY - mouseRef.lastY;
-      mouseRef.lastX = e.touches[0].clientX;
-      mouseRef.lastY = e.touches[0].clientY;
-      velocityRef.vx = dx * 0.008;
-      velocityRef.vy = dy * 0.008;
-    };
-
-    const handleTouchEnd = () => {
-      mouseRef.isDown = false;
-    };
-
-    canvas.addEventListener('touchstart', handleTouchStart, { passive: true });
-    canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
-    canvas.addEventListener('touchend', handleTouchEnd);
-
-    const applyRotation = () => {
-      sphere.rotation.y = rotationRef.y;
-      sphere.rotation.x = rotationRef.x;
-      for (const line of latLines) {
-        line.rotation.y = rotationRef.y;
-        line.rotation.x = rotationRef.x;
-      }
-      for (const line of lngLines) {
-        line.rotation.y = rotationRef.y;
-        line.rotation.x = rotationRef.x;
-      }
-      atmosphere.rotation.y = rotationRef.y;
-      atmosphere.rotation.x = rotationRef.x;
-      for (const glowLine of glowLines) {
-        glowLine.rotation.y = rotationRef.y;
-        glowLine.rotation.x = rotationRef.x;
-      }
+    const satPosAt = (sat: Satellite, angle: number): THREE.Vector3 => {
+      const x = Math.cos(angle) * sat.radius;
+      const z = Math.sin(angle) * sat.radius;
+      const v = new THREE.Vector3(x, 0, z);
+      v.applyEuler(new THREE.Euler(sat.tiltX, 0, sat.tiltZ));
+      return v;
     };
 
     const stopLoop = createThrottledLoop(
       (time) => {
-        rotationRef.y += velocityRef.vx;
-        rotationRef.x += velocityRef.vy;
-        velocityRef.vx *= 0.95;
-        velocityRef.vy *= 0.95;
-
-        if (Math.abs(velocityRef.vx) < 0.0003 && Math.abs(velocityRef.vy) < 0.0003) {
-          rotationRef.y += 0.003;
+        if (!mouseRef.isDown) {
+          rotationRef.y += velocityRef.vx + 0.0018;
+          rotationRef.x += velocityRef.vy;
+          velocityRef.vx *= 0.95;
+          velocityRef.vy *= 0.95;
         }
-        rotationRef.x = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, rotationRef.x));
-        applyRotation();
+        globeGroup.rotation.y = rotationRef.y;
+        globeGroup.rotation.x = rotationRef.x;
 
-        for (const dot of orbitDots) {
-          const angle = time * 0.001 * dot.speed + dot.phase;
-          const radius = 1.35;
-          const cosT = Math.cos(dot.tilt);
-          const sinT = Math.sin(dot.tilt);
-          dot.mesh.position.set(
-            Math.cos(angle) * radius,
-            Math.sin(angle) * radius * sinT,
-            Math.sin(angle) * radius * cosT
-          );
-          const pulse = 0.6 + 0.4 * Math.sin(time * 0.003 + dot.phase);
-          (dot.mesh.material as THREE.MeshBasicMaterial).opacity = pulse;
-        }
+        camera.position.z += (zoomRef.z - camera.position.z) * 0.12;
+
+        atmosMat.opacity = 0.08 + 0.03 * Math.sin(time * 0.001);
+
+        satellites.forEach((sat) => {
+          const angle = time * 0.001 * sat.speed + sat.phase;
+          const pos = satPosAt(sat, angle);
+          sat.mesh.position.copy(pos);
+          sat.mesh.rotation.y = time * 0.002;
+          sat.mesh.rotation.x = time * 0.001;
+
+          const tp = sat.trailPositions;
+          for (let i = TRAIL_LEN - 1; i > 0; i--) {
+            tp[i * 3] = tp[(i - 1) * 3];
+            tp[i * 3 + 1] = tp[(i - 1) * 3 + 1];
+            tp[i * 3 + 2] = tp[(i - 1) * 3 + 2];
+          }
+          tp[0] = pos.x; tp[1] = pos.y; tp[2] = pos.z;
+          (sat.trail.geometry.getAttribute('position') as THREE.BufferAttribute).needsUpdate = true;
+        });
 
         renderer.render(scene, camera);
       },
@@ -295,28 +345,23 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
 
     return () => {
       stopLoop();
-      canvas.removeEventListener('mousedown', handleMouseDown);
-      canvas.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-      canvas.removeEventListener('wheel', handleWheel);
-      canvas.removeEventListener('touchstart', handleTouchStart);
-      canvas.removeEventListener('touchmove', handleTouchMove);
-      canvas.removeEventListener('touchend', handleTouchEnd);
+      canvas.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUpWindow);
+      canvas.removeEventListener('wheel', onWheel);
+      canvas.removeEventListener('dblclick', onDblClick);
       renderer.dispose();
-      sphereGeo.dispose();
-      sphereMat.dispose();
-      atmosGeo.dispose();
-      atmosMat.dispose();
-      dotGeo.dispose();
-      if (container.contains(renderer.domElement)) {
-        container.removeChild(renderer.domElement);
-      }
+      earthTex.dispose();
+      earthMat.dispose();
+      wireGeo.dispose(); wireMat.dispose();
+      atmosMat.dispose(); satGeo.dispose();
+      if (container.contains(canvas)) container.removeChild(canvas);
     };
   }, [fpsCap, reduceMotion]);
 
   if (reduceMotion) {
     return (
-      <div style={{ width: 300, height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, color: '#64748b' }}>
+      <div style={{ width: '100%', height: 220, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, color: '#64748b' }}>
         GLOBE (REDUCED MOTION)
       </div>
     );
@@ -326,29 +371,29 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
     <div
       ref={containerRef}
       style={{
-        width: 300,
-        height: 300,
+        width: '100%',
+        height: 220,
         position: 'relative',
-        cursor: 'grab',
+        overflow: 'hidden',
         ...style,
       }}
     >
       <div
         style={{
           position: 'absolute',
-          bottom: 8,
+          bottom: 4,
           left: '50%',
           transform: 'translateX(-50%)',
-          fontSize: 10,
+          fontSize: 8.5,
           fontFamily: 'var(--font-mono)',
-          color: '#64748b',
+          color: 'var(--text-muted)',
           letterSpacing: 1,
           whiteSpace: 'nowrap',
           pointerEvents: 'none',
-          textShadow: '0 0 6px rgba(0, 255, 136, 0.3)',
+          textShadow: '0 0 6px rgba(0, 255, 136, 0.4)',
         }}
       >
-        GLOBAL NODES: 847 │ DRAG TO ROTATE
+        EARTH 3D │ DRAG · ZOOM
       </div>
     </div>
   );

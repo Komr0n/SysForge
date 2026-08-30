@@ -162,8 +162,8 @@ export default function BootScreen({ onComplete }: BootScreenProps) {
               opacity: 1,
             }}
           >
-            {line}
-            {i === visibleLines.length - 1 && line.length > 0 && (
+            {line ?? ''}
+            {i === visibleLines.length - 1 && typeof line === 'string' && line.length > 0 && (
               <span className="animate-pulse">_</span>
             )}
           </div>

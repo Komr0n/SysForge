@@ -59,7 +59,7 @@ export default function AudioVisualizer() {
       const dpr = Math.min(window.devicePixelRatio, 2);
       canvas.width = W * dpr;
       canvas.height = H * dpr;
-      ctx.scale(dpr, dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       draw(ctx, W);
     };
 
