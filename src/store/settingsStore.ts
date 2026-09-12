@@ -312,17 +312,7 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sysforge-settings',
       storage: createJSONStorage(() => tauriStorageAdapter),
-      partialize: (state) => {
-        const { apiKeys: _ignoredApiKeys, ...rest } = state;
-        return {
-          ...rest,
-          jarvis: {
-            ...rest.jarvis,
-            cloud: { ...rest.jarvis.cloud, apiKey: '' },
-            cloudProviders: (rest.jarvis.cloudProviders || []).map((p) => ({ ...p, apiKey: '' })),
-          },
-        };
-      },
+      partialize: (state) => state,
       merge: (persisted, current) => {
         const saved = persisted as Partial<SettingsState> & {
           performance?: Partial<SettingsState['performance']>;
@@ -344,11 +334,11 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }
 
-        // Preserve in-memory apiKeys from current session (never write/read to disk)
+        // Restore persisted API keys
         merged.apiKeys = {
-          abuseipdb: current.apiKeys.abuseipdb || saved.apiKeys?.abuseipdb || '',
-          virustotal: current.apiKeys.virustotal || saved.apiKeys?.virustotal || '',
-          nvd: current.apiKeys.nvd || saved.apiKeys?.nvd || '',
+          abuseipdb: saved.apiKeys?.abuseipdb || current.apiKeys.abuseipdb || '',
+          virustotal: saved.apiKeys?.virustotal || current.apiKeys.virustotal || '',
+          nvd: saved.apiKeys?.nvd || current.apiKeys.nvd || '',
         };
 
         if (saved.widgetPositions) {
@@ -364,7 +354,7 @@ export const useSettingsStore = create<SettingsState>()(
                 return {
                   ...def,
                   ...foundSaved,
-                  apiKey: foundCurrent?.apiKey || foundSaved?.apiKey || '',
+                  apiKey: foundSaved?.apiKey || foundCurrent?.apiKey || '',
                 };
               })
             : currentProviders;
@@ -372,25 +362,25 @@ export const useSettingsStore = create<SettingsState>()(
           merged.jarvis = {
             ...DEFAULT_JARVIS_CONFIG,
             ...saved.jarvis,
-            local: { ...DEFAULT_JARVIS_CONFIG.local, ...saved.jarvis.local },
+            local: { ...DEFAULT_JARVIS_CONFIG.local, ...saved.jarvis?.local },
             cloud: {
               ...DEFAULT_JARVIS_CONFIG.cloud,
-              ...saved.jarvis.cloud,
-              apiKey: current.jarvis.cloud.apiKey || saved.jarvis.cloud?.apiKey || '',
+              ...saved.jarvis?.cloud,
+              apiKey: saved.jarvis?.cloud?.apiKey || current.jarvis?.cloud?.apiKey || '',
             },
             voice: {
               ...DEFAULT_JARVIS_CONFIG.voice,
-              ...saved.jarvis.voice,
-              followUpListening: saved.jarvis.voice?.followUpListening ?? DEFAULT_JARVIS_CONFIG.voice.followUpListening,
-              followUpWindowMs: saved.jarvis.voice?.followUpWindowMs ?? DEFAULT_JARVIS_CONFIG.voice.followUpWindowMs,
+              ...saved.jarvis?.voice,
+              followUpListening: saved.jarvis?.voice?.followUpListening ?? DEFAULT_JARVIS_CONFIG.voice.followUpListening,
+              followUpWindowMs: saved.jarvis?.voice?.followUpWindowMs ?? DEFAULT_JARVIS_CONFIG.voice.followUpWindowMs,
             },
             thresholds: {
               ...DEFAULT_JARVIS_CONFIG.thresholds,
-              ...saved.jarvis.thresholds,
+              ...saved.jarvis?.thresholds,
             },
             cloudProviders: savedProviders,
-            autoFallbackOnRateLimit: saved.jarvis.autoFallbackOnRateLimit ?? true,
-            activeCloudProviderId: saved.jarvis.activeCloudProviderId ?? 'gemini',
+            autoFallbackOnRateLimit: saved.jarvis?.autoFallbackOnRateLimit ?? true,
+            activeCloudProviderId: saved.jarvis?.activeCloudProviderId ?? 'gemini',
           };
         }
 

@@ -589,7 +589,10 @@ async fn jarvis_open_system_app(app_id: String) -> Result<String, String> {
 #[derive(serde::Deserialize)]
 struct LlmChatRequest {
     url: String,
+    #[serde(default)]
+    method: Option<String>,
     headers: std::collections::HashMap<String, String>,
+    #[serde(default)]
     body: serde_json::Value,
 }
 
@@ -606,16 +609,23 @@ async fn jarvis_llm_request(req: LlmChatRequest) -> Result<serde_json::Value, St
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut builder = client.post(&req.url).json(&req.body);
+    let is_get = req.method.as_deref().map(|m| m.eq_ignore_ascii_case("GET")).unwrap_or(false);
+    let mut builder = if is_get {
+        client.get(&req.url)
+    } else {
+        client.post(&req.url).json(&req.body)
+    };
     for (k, v) in &req.headers {
         builder = builder.header(k, v);
     }
     let resp = builder.send().await.map_err(|e| e.to_string())?;
     let status = resp.status();
-    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    let text = resp.text().await.map_err(|e| e.to_string())?;
     if !status.is_success() {
-        return Err(format!("HTTP {}: {}", status, json));
+        return Err(format!("HTTP {}: {}", status, text));
     }
+    let json: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|_| serde_json::json!({ "response": text }));
     Ok(json)
 }
 

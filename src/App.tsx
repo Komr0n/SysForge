@@ -114,7 +114,7 @@ export default function App() {
           opacity: jarvisState === 'speaking' ? 0.95 : 0.65,
           transition: 'opacity 0.4s ease',
         }}>
-          <JarvisOrb3D state={jarvisState} size={300} isFollowUp={false} />
+          <JarvisOrb3D state={jarvisState} size={520} isFollowUp={false} />
         </div>
       </ErrorBoundary>
 

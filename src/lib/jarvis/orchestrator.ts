@@ -153,26 +153,72 @@ export class JarvisOrchestrator {
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
     const url = baseUrl.endsWith('/v1') ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`;
 
+    const modelName = this.config.local.model?.trim() || 'llama3';
+    const hasTools = tools && tools.length > 0;
+
     const messages = [
       { role: 'system', content: systemPrompt },
       ...history,
       { role: 'user', content: userText },
     ];
 
-    const body = {
-      model: this.config.local.model || 'llama3.2',
+    const body: Record<string, unknown> = {
+      model: modelName,
       messages,
-      tools,
-      tool_choice: 'auto',
       stream: false,
       temperature: 0.3,
       max_tokens: 512,
     };
 
+    if (hasTools) {
+      body.tools = tools;
+      body.tool_choice = 'auto';
+    }
+
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    const data = await this.postLlm(url, headers, body);
-    const parsed = this.parseOpenAIResponse(data);
-    return { ...parsed, providerUsed: 'Ollama (Local)' };
+
+    try {
+      const data = await this.postLlm(url, headers, body);
+      const parsed = this.parseOpenAIResponse(data);
+      return { ...parsed, providerUsed: `Ollama (${modelName})` };
+    } catch (err) {
+      const errMsg = (err as Error).message || String(err);
+      // Если модель Ollama не поддерживает OpenAI tools (например llama3:latest), делаем автоматический fallback в text-режим без tools
+      if (hasTools && (errMsg.includes('does not support tools') || errMsg.includes('tools') || errMsg.includes('400'))) {
+        console.warn(`[Jarvis Ollama] Модель "${modelName}" не поддерживает нативные tools. Повторный запрос в текстовом режиме...`);
+
+        const toolDescriptions = tools
+          .map((t) => `- ${t.function.name}: ${t.function.description}`)
+          .join('\n');
+        const fallbackSystem = `${systemPrompt}\n\n[Доступные системные инструменты]:\n${toolDescriptions}\nЕсли необходимо выполнить команду, выведи в ответе блок JSON: {"action": "название_инструмента", "args": {...}}`;
+
+        const fallbackMessages = [
+          { role: 'system', content: fallbackSystem },
+          ...history,
+          { role: 'user', content: userText },
+        ];
+
+        const fallbackBody = {
+          model: modelName,
+          messages: fallbackMessages,
+          stream: false,
+          temperature: 0.3,
+          max_tokens: 512,
+        };
+
+        const fallbackData = await this.postLlm(url, headers, fallbackBody);
+        const parsed = this.parseOpenAIResponse(fallbackData);
+
+        // Извлекаем action из текста, если модель сгенерировала JSON блок
+        const textActions = this.extractActionsFromText(parsed.response);
+        if (textActions.length > 0 && parsed.actions.length === 0) {
+          parsed.actions = textActions;
+        }
+
+        return { ...parsed, providerUsed: `Ollama (${modelName})` };
+      }
+      throw err;
+    }
   }
 
   private async callCloudWithFallback(
@@ -297,14 +343,55 @@ export class JarvisOrchestrator {
     return { response, actions };
   }
 
+  private extractActionsFromText(text: string): OrchestratorResult['actions'] {
+    const actions: OrchestratorResult['actions'] = [];
+    if (!text) return actions;
+
+    // 1. Try markdown JSON codeblock: ```json { "action": ... } ```
+    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+    if (codeBlockMatch) {
+      try {
+        const obj = JSON.parse(codeBlockMatch[1]);
+        if (obj && typeof obj === 'object') {
+          if (typeof obj.action === 'string') {
+            actions.push({ toolName: obj.action, args: (obj.args || {}) as Record<string, unknown> });
+            return actions;
+          }
+          if (typeof obj.toolName === 'string') {
+            actions.push({ toolName: obj.toolName, args: (obj.args || {}) as Record<string, unknown> });
+            return actions;
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Try raw JSON object containing "action"
+    const rawMatch = text.match(/\{[\s\S]*?"action"\s*:\s*"([^"]+)"[\s\S]*?\}/);
+    if (rawMatch) {
+      try {
+        const obj = JSON.parse(rawMatch[0]);
+        if (obj && obj.action) {
+          actions.push({ toolName: obj.action, args: (obj.args || {}) as Record<string, unknown> });
+          return actions;
+        }
+      } catch {}
+    }
+
+    return actions;
+  }
+
   async checkAvailability(providerProfile?: CloudProviderProfile): Promise<{ available: boolean; error?: string }> {
     try {
       if (this.config.provider === 'local' && !providerProfile) {
-        const url = `${this.config.local.ollamaUrl}/models`;
+        let baseUrl = this.config.local.ollamaUrl.trim();
+        if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
+        const rootUrl = baseUrl.replace(/\/v1$/, '');
+        const url = `${rootUrl}/api/tags`;
+
         if (isTauri) {
           const { invoke } = await import('@tauri-apps/api/core');
           await invoke('jarvis_llm_request', {
-            req: { url, headers: {}, body: {} },
+            req: { url, method: 'GET', headers: {}, body: {} },
           });
           return { available: true };
         }
@@ -313,33 +400,46 @@ export class JarvisOrchestrator {
       }
 
       const p = providerProfile || this.getOrderedProviderChain()[0];
-      if (!p || !p.apiKey) return { available: false, error: 'API ключ не задан' };
+      if (!p || !p.apiKey?.trim()) return { available: false, error: 'API ключ не задан' };
 
       let baseUrl = p.baseUrl?.trim() || 'https://generativelanguage.googleapis.com/v1beta/openai';
       if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
       const apiKey = p.apiKey.trim();
       const isGemini = baseUrl.includes('generativelanguage.googleapis.com') || apiKey.startsWith('AIzaSy');
+      const model = p.model?.trim() || (isGemini ? 'gemini-1.5-flash' : 'gpt-4o-mini');
 
-      const headers: Record<string, string> = { Authorization: `Bearer ${apiKey}` };
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      };
       if (isGemini) headers['x-goog-api-key'] = apiKey;
       if (baseUrl.includes('openrouter.ai')) {
         headers['HTTP-Referer'] = 'https://sysforge.local';
         headers['X-Title'] = 'SysForge Jarvis';
       }
 
-      const url = `${baseUrl}/models`;
+      // Отправляем легковесный проверочный запрос (1 токен), идентичный реальному чату
+      const url = `${baseUrl}/chat/completions`;
+      const body = {
+        model,
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+      };
+
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
         await invoke('jarvis_llm_request', {
-          req: { url, headers, body: {} },
+          req: { url, method: 'POST', headers, body },
         });
         return { available: true };
       }
 
       const response = await fetch(url, {
+        method: 'POST',
         headers,
-        signal: AbortSignal.timeout(6000),
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(8000),
       });
 
       if (response.ok) return { available: true };
