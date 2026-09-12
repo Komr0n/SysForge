@@ -1,7 +1,7 @@
 # ⚡ SysForge — Tactical HUD Desktop OS & Jarvis AI
 
 > **SysForge** — это полнофункциональная тактическая десктопная eDEX-UI «ОС»-оболочка для системных администраторов, DevOps, специалистов по кибербезопасности и разработчиков.
-> Проект сочетает научно-фантастический HUD-интерфейс, живую аппаратную телеметрию, 24 полноценные мини-программы, интерактивный 3D-глобус Земли, голографический 3D Arc Reactor и автономного голосового ИИ-ассистента **Джарвиса (J.A.R.V.I.S.)**.
+> Проект сочетает научно-фантастический HUD-интерфейс, живую аппаратную телеметрию, 26 полноценных мини-программ, интерактивный 3D-глобус Земли, голографический 3D Arc Reactor и автономного голосового ИИ-ассистента **Джарвиса (J.A.R.V.I.S.)**.
 > Построена на стеке **React 18 + TypeScript + Vite 5 + Tauri 2 (Rust Tokio)**.
 
 ---
@@ -12,7 +12,7 @@
 - [🤖 Голосовой ИИ-ассистент «Джарвис» (Jarvis 2.0)](#-голосовой-ии-ассистент-джарвис-jarvis-20)
 - [🔮 Голографический 3D Arc Reactor HUD](#-голографический-3d-arc-reactor-hud)
 - [🖥️ Архитектура интерфейса (HUD Layout)](#️-архитектура-интерфейса-hud-layout)
-- [🧩 Каталог мини-программ (24/24)](#-каталог-мини-программ-2424)
+- [🧩 Каталог мини-программ (26/26)](#-каталог-мини-программ-2626)
 - [🎨 Оформление, темы и фоновые эффекты](#-оформление-темы-и-фоновые-эффекты)
 - [🛡️ Безопасность и Rust Backend](#️-безопасность-и-rust-backend)
 - [🚀 Установка и запуск](#-установка-и-запуск)
@@ -118,7 +118,7 @@
   - Полноэкранный режим (F11) и системные часы.
 - **Sidebar (Левая панель, 220px / 48px)**:
   - 4 категории: `Network`, `Security`, `System`, `Developer`.
-  - 24 приложения с поддержкой **Toggle** (клик открывает / повторный клик закрывает) и неоновой подсветкой активных окон.
+  - 26 приложений с поддержкой **Toggle** (клик открывает / повторный клик закрывает) и неоновой подсветкой активных окон.
 - **Workspace (Центральная рабочая область)**:
   - Перетаскиваемые и масштабируемые окна приложений на базе `react-rnd`.
   - Оверлейные виджеты: большие часы `ClockWidget`, голографический 3D Arc Reactor и 3D-глобус Земли.
@@ -134,7 +134,7 @@
 
 ---
 
-## 🧩 Каталог мини-программ (24/24)
+## 🧩 Каталог мини-программ (26/26)
 
 | № | Название | ID | Категория | Описание |
 |---|---|---|---|---|
@@ -145,23 +145,25 @@
 | 5 | **DNS Lookup** | `dns` | Network | Запросы записей A, AAAA, MX, NS, TXT, CNAME через `nslookup` |
 | 6 | **SSH Client** | `ssh` | Network | Терминальный эмулятор удалённого подключения |
 | 7 | **Wake-on-LAN** | `wol` | Network | Отправка Magic Packet по UDP на MAC-адрес |
-| 8 | **Hash Tool** | `hash` | Security | Хеширование текста: MD5, SHA-1, SHA-256, SHA-512 |
-| 9 | **SSL Inspector** | `ssl` | Security | Анализ SSL/TLS сертификата, SAN и срока действия |
-| 10 | **Password Generator** | `password` | Security | Генератор стойких паролей с настройкой энтропии |
-| 11 | **IP Intelligence** | `ip-intel` | Security | Abuse score, геолокация, ISP, проверка Tor/Proxy через AbuseIPDB |
-| 12 | **Subnet Calculator** | `subnet` | Security | Расчёт IPv4 сетей, масок, Wildcard и диапазона IP |
-| 13 | **JWT Decoder** | `jwt` | Security | Декодирование и проверка сигнатуры JSON Web Token |
-| 14 | **CVE Search** | `cve` | Security | Поиск по базе уязвимостей NIST NVD с фильтрами CVSS |
-| 15 | **Process Manager** | `processes` | System | Диспетчер процессов Windows: PID, CPU%, Memory, завершение |
-| 16 | **System Overview** | `system-overview` | System | Подробная сводка: ядра CPU, RAM, Swap, ОС, Аптайм, Диски |
-| 17 | **Log Analyzer** | `logs` | System | Drag & Drop анализатор лог-файлов с подсветкой ошибок |
-| 18 | **File Hash Check** | `file-hash` | System | Вычисление и сверка хешей локальных файлов |
-| 19 | **API Tester** | `api-tester` | Developer | REST API клиент (GET, POST, PUT, DELETE, Headers, Body) |
-| 20 | **Data Formatter** | `formatter` | Developer | Валидатор, форматировщик и минификатор JSON/XML |
-| 21 | **Encoder / Decoder** | `encoder` | Developer | Конвертер Base64, URL, HTML Entities и Hex |
-| 22 | **Regex Tester** | `regex` | Developer | Регулярные выражения с подсветкой групп и совпадений |
-| 23 | **Snippet Manager** | `snippets` | Developer | Каталог сниппетов кода с подсветкой синтаксиса |
-| 24 | **Diff Viewer** | `diff` | Developer | Сравнение текстов side-by-side с подсветкой диффов |
+| 8 | **Network by Process** | `net-processes` | Network | Мониторинг сетевой активности по отдельным процессам Windows (PID, соединения, протоколы TCP/UDP, удалённые хосты/порты, скорость Rx/Tx) |
+| 9 | **Hash Tool** | `hash` | Security | Хеширование текста: MD5, SHA-1, SHA-256, SHA-512 |
+| 10 | **SSL Inspector** | `ssl` | Security | Анализ SSL/TLS сертификата, SAN и срока действия |
+| 11 | **Password Generator** | `password` | Security | Генератор стойких паролей с настройкой энтропии |
+| 12 | **IP Intelligence** | `ip-intel` | Security | Abuse score, геолокация, ISP, проверка Tor/Proxy через AbuseIPDB |
+| 13 | **Subnet Calculator** | `subnet` | Security | Расчёт IPv4 сетей, масок, Wildcard и диапазона IP |
+| 14 | **JWT Decoder** | `jwt` | Security | Декодирование и проверка сигнатуры JSON Web Token |
+| 15 | **CVE Search** | `cve` | Security | Поиск по базе уязвимостей NIST NVD с фильтрами CVSS |
+| 16 | **Process Manager** | `processes` | System | Диспетчер процессов Windows: PID, CPU%, Memory, завершение |
+| 17 | **System Overview** | `system-overview` | System | Подробная сводка: ядра CPU, RAM, Swap, ОС, Аптайм, Диски |
+| 18 | **Log Analyzer** | `logs` | System | Drag & Drop анализатор лог-файлов с подсветкой ошибок |
+| 19 | **File Hash Check** | `file-hash` | System | Вычисление и сверка хешей локальных файлов |
+| 20 | **App Scheduler** | `app-scheduler` | System | Интеллектуальный планировщик задач: автозапуск приложений по расписанию, периодические интервалы, таймеры и правила |
+| 21 | **API Tester** | `api-tester` | Developer | REST API клиент (GET, POST, PUT, DELETE, Headers, Body) |
+| 22 | **Data Formatter** | `formatter` | Developer | Валидатор, форматировщик и минификатор JSON/XML |
+| 23 | **Encoder / Decoder** | `encoder` | Developer | Конвертер Base64, URL, HTML Entities и Hex |
+| 24 | **Regex Tester** | `regex` | Developer | Регулярные выражения с подсветкой групп и совпадений |
+| 25 | **Snippet Manager** | `snippets` | Developer | Каталог сниппетов кода с подсветкой синтаксиса |
+| 26 | **Diff Viewer** | `diff` | Developer | Сравнение текстов side-by-side с подсветкой диффов |
 
 ---
 
