@@ -31,21 +31,40 @@ export interface EmbeddingMatch {
 
 // ─── Keyword-матчер (fallback без ONNX) ──────────────────────────────────────
 
+const STOP_VERBS = new Set([
+  'открой', 'запусти', 'старт', 'включи', 'launch', 'open', 'start',
+  'закрой', 'заверши', 'убей', 'останови', 'выключи', 'kill', 'close', 'stop', 'quit',
+  'покажи', 'показать', 'сделай', 'do', 'show',
+]);
+const CLOSE_INTENT = /\b(закрой|заверши|убей|останови|выключи|kill|close|stop|quit)\b/i;
+const OPEN_INTENT  = /\b(открой|запусти|старт|включи|launch|open|start)\b/i;
+
 function keywordMatch(text: string): EmbeddingMatch | null {
   const lower = text.toLowerCase();
   const builtins = skillRegistry.getBuiltinSkills();
-
+  const userWantsClose = CLOSE_INTENT.test(lower);
+  const userWantsOpen = OPEN_INTENT.test(lower);
   let bestMatch: { skillId: string; score: number } | null = null;
 
   for (const skill of builtins) {
+    if (userWantsClose && skill.steps.some((s) => s.tool === 'open_system_app' || s.tool === 'open_url')) {
+      continue;
+    }
+    if (userWantsOpen && skill.steps.some((s) => s.tool === 'close_os_app')) {
+      continue;
+    }
+
     const phrases = [...(skill.phrases.ru || []), ...(skill.phrases.en || [])];
     for (const phrase of phrases) {
       const phraseLower = phrase.toLowerCase();
+      if (userWantsClose && OPEN_INTENT.test(phraseLower) && !CLOSE_INTENT.test(phraseLower)) continue;
+      if (userWantsOpen && CLOSE_INTENT.test(phraseLower) && !OPEN_INTENT.test(phraseLower)) continue;
+
       const words = phraseLower.split(' ');
       let score = 0;
       let matches = 0;
       for (const word of words) {
-        if (word.length > 2 && lower.includes(word)) {
+        if (word.length > 2 && !STOP_VERBS.has(word) && lower.includes(word)) {
           matches++;
           score += word.length;
         }

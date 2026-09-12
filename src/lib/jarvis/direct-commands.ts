@@ -18,7 +18,143 @@ function prog(pattern: string): RegExp {
   return new RegExp(pattern, 'i');
 }
 
+// ─── Нормализация речи (фонетические ошибки распознавания) ─────────────────
+
+const SPEECH_FIXES: [RegExp, string][] = [
+  // Частые ошибки распознавания русской речи
+  [/калькулятар/gi, 'калькулятор'],
+  [/калкулятор/gi, 'калькулятор'],
+  [/кальк[уі]лятор/gi, 'калькулятор'],
+  [/блакнот/gi, 'блокнот'],
+  [/блокнод/gi, 'блокнот'],
+  [/праводник/gi, 'проводник'],
+  [/телеграмм?а?/gi, 'телеграм'],
+  [/діспетчер/gi, 'диспетчер'],
+  [/диспечер/gi, 'диспетчер'],
+  [/паинт/gi, 'paint'],
+  [/кальк/gi, 'калькулятор'],
+  // Ошибки в глаголах
+  [/аткрой/gi, 'открой'],
+  [/закрый/gi, 'закрой'],
+  [/запусті/gi, 'запусти'],
+  [/пакажи/gi, 'покажи'],
+  [/поіщи/gi, 'поищи'],
+  // Ютуб варианты
+  [/ютюб/gi, 'ютуб'],
+  [/ю[тд]у[бп]/gi, 'ютуб'],
+];
+
+function normalizeSpeech(text: string): string {
+  let result = text;
+  for (const [pattern, replacement] of SPEECH_FIXES) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
 // ─── Таблица команд ───────────────────────────────────────────────────────────
+
+interface AppDef {
+  appId: string;
+  displayName: string;
+  aliases: string[];
+  /** Имена процессов Windows для команды закрытия */
+  processNames: string[];
+  kind: 'system_app' | 'url';
+  urlOrNothing?: string;
+}
+
+const APPS: AppDef[] = [
+  {
+    appId: 'calculator', displayName: 'Калькулятор',
+    aliases: ['калькулятор', 'калькулятора', 'калькуляторы', 'калькулятором', 'кальк', 'calculator', 'calc'],
+    processNames: ['CalculatorApp.exe', 'calc.exe', 'calculatorapp', 'calc', 'calculator', 'win32calc'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'notepad', displayName: 'Блокнот',
+    aliases: ['блокнот', 'блокнота', 'блокноты', 'notepad'],
+    processNames: ['notepad.exe', 'notepad'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'explorer', displayName: 'Проводник',
+    aliases: ['проводник', 'проводника', 'explorer'],
+    processNames: ['explorer.exe', 'explorer'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'task_manager', displayName: 'Диспетчер задач',
+    aliases: ['диспетчер задач', 'диспетчер', 'task manager', 'taskmgr'],
+    processNames: ['Taskmgr.exe', 'taskmgr'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'paint', displayName: 'Paint',
+    aliases: ['paint', 'паинт', 'пэйнт'],
+    processNames: ['mspaint.exe', 'mspaint'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'chrome', displayName: 'Chrome',
+    aliases: ['хром', 'хрома', 'chrome', 'гугл хром', 'google chrome'],
+    processNames: ['chrome.exe', 'chrome'],
+    kind: 'url', urlOrNothing: 'https://google.com',
+  },
+  {
+    appId: 'telegram', displayName: 'Telegram',
+    aliases: ['телеграм', 'телеграма', 'телега', 'telegram'],
+    processNames: ['telegram.exe', 'telegram'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'cmd', displayName: 'Командная строка',
+    aliases: ['командная строка', 'командную строку', 'cmd', 'command prompt'],
+    processNames: ['cmd.exe', 'cmd'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'powershell', displayName: 'PowerShell',
+    aliases: ['powershell', 'пауэршелл', 'пауэршел'],
+    processNames: ['powershell.exe', 'powershell'],
+    kind: 'system_app',
+  },
+];
+
+const OPEN_VERBS = 'открой|запусти|старт|включи|launch|open|start';
+const CLOSE_VERBS = 'закрой|заверши|убей|останови|выключи|ликвидируй|погаси|kill|close|stop|quit';
+
+function buildAppCommands(): DirectCommandPattern[] {
+  const result: DirectCommandPattern[] = [];
+  for (const app of APPS) {
+    const aliasGroup = app.aliases.join('|');
+    result.push({
+      patterns: [
+        prog(`(${OPEN_VERBS})\\s+(?:все\\s+)?(?:программ[ууы]\\s+|приложени[ея]\\s+|окн[оа]\\s+)?(${aliasGroup})`),
+        prog(`^(${aliasGroup})$`),
+        prog(`(${OPEN_VERBS})\\s+.*\\b(${aliasGroup})`),
+      ],
+      handler: () => ({
+        toolName: app.kind === 'url' ? 'open_url' : 'open_system_app',
+        args: app.kind === 'url' ? { url: app.urlOrNothing } : { appId: app.appId, displayName: app.displayName },
+        displayText: `Открываю ${app.displayName.toLowerCase()}, сэр.`,
+      }),
+    });
+    result.push({
+      patterns: [
+        prog(`(${CLOSE_VERBS})\\s+(?:все\\s+)?(?:программы?\\s+|приложени[ея]\\s+|окн[оа]\\s+)?(?:процесс[ыа]?\\s+)?(${aliasGroup})`),
+        prog(`(${CLOSE_VERBS})\\s+.*\\b(${aliasGroup})`),
+        prog(`\\b(${aliasGroup})\\b.*\\s+(${CLOSE_VERBS})`),
+      ],
+      handler: () => ({
+        toolName: 'close_os_app',
+        args: { appName: app.processNames[0], allProcessNames: app.processNames },
+        displayText: `Закрываю ${app.displayName.toLowerCase()}, сэр.`,
+      }),
+    });
+  }
+  return result;
+}
 
 const DIRECT_COMMANDS: DirectCommandPattern[] = [
 
@@ -76,95 +212,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     }),
   },
 
-  // ── Системные приложения Windows ─────────────────────────────────────────────
-  {
-    patterns: [
-      prog('(открой|запусти|старт|launch|open)\\s+(калькулятор|calculator|calc)'),
-      prog('^(калькулятор|кальк|calculator|calc)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'calculator', displayName: 'Калькулятор' },
-      displayText: 'Открываю калькулятор, сэр.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(блокнот|notepad|текстовый редактор)'),
-      prog('^(блокнот|notepad)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'notepad', displayName: 'Блокнот' },
-      displayText: 'Открываю блокнот.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(проводник|explorer|файловый менеджер|файлы|папки)'),
-      prog('^(проводник|explorer)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'explorer', displayName: 'Проводник' },
-      displayText: 'Открываю проводник Windows.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(командная строка|cmd|command prompt|консоль)'),
-      prog('^(cmd|командная строка)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'cmd', displayName: 'Командная строка' },
-      displayText: 'Открываю командную строку.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(powershell|пауэршелл)'),
-      prog('^(powershell)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'powershell', displayName: 'PowerShell' },
-      displayText: 'Открываю PowerShell.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(диспетчер задач|task manager|taskmgr)'),
-      prog('^(диспетчер задач|task manager|taskmgr)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'task_manager', displayName: 'Диспетчер задач' },
-      displayText: 'Открываю диспетчер задач Windows.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(браузер|browser|edge|chrome|firefox)'),
-      prog('^(браузер|browser)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_url',
-      args: { url: 'https://google.com' },
-      displayText: 'Открываю браузер.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(открой|запусти|launch|open)\\s+(paint|паинт|рисовалку|mspaint)'),
-      prog('^(paint|паинт)$'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { appId: 'paint', displayName: 'Paint' },
-      displayText: 'Открываю Paint.',
-    }),
-  },
+  ...buildAppCommands(),
 
   // ── Веб-ресурсы ──────────────────────────────────────────────────────────────
   {
@@ -522,7 +570,7 @@ function cleanQuery(text: string): string {
     .trim()
     .toLowerCase()
     // Удаляем начальные обращения: джарвис, jarvis, жарвис, эй, слушай
-    .replace(/^(эй\s+|hey\s+)?(джарвис|jarvis|жарвис|jarvis:)\s*[,:\s]*/i, '')
+    .replace(/^(эй\s+|hey\s+)?(джарвис|джарвес|дарвис|jarvis|жарвис|джарвіс|jarvis:)\s*[,:\s]*/i, '')
     // Удаляем вежливые вводные
     .replace(/^(пожалуйста|пж|пожалуйсто|please|can you|could you)\s+/i, '')
     .replace(/\s+(пожалуйста|пж|please)$/i, '')
@@ -534,8 +582,12 @@ function cleanQuery(text: string): string {
 export function directMatch(text: string): DirectCommandMatch | null {
   const raw = text.trim().toLowerCase();
   const cleaned = cleanQuery(text);
+  // Normalize common speech recognition errors
+  const normalizedRaw = normalizeSpeech(raw);
+  const normalizedCleaned = normalizeSpeech(cleaned);
 
-  const candidates = cleaned !== raw ? [cleaned, raw] : [raw];
+  // Try all variants: cleaned+normalized first (most specific), then raw
+  const candidates = new Set([normalizedCleaned, normalizedRaw, cleaned, raw].filter(Boolean));
 
   for (const candidate of candidates) {
     if (!candidate) continue;
@@ -559,6 +611,7 @@ export function getDirectCommandExamples(): string[] {
     'открой браузер',
     'открой блокнот',
     'открой проводник',
+    'закрой калькулятор',
     'диспетчер задач',
     'статус системы',
     'покажи процессы',

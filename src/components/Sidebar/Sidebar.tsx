@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import {
+import { Clock,
   Network,
   Shield,
   Monitor,
@@ -53,6 +53,7 @@ const apps: AppItem[] = [
   { id: 'dns', title: 'DNS Lookup', icon: <Globe size={16} />, category: 'network' },
   { id: 'ssh', title: 'SSH Client', icon: <Terminal size={16} />, category: 'network' },
   { id: 'wol', title: 'Wake-on-LAN', icon: <Zap size={16} />, category: 'network' },
+  { id: 'net-processes', title: 'Network by Process', icon: <Network size={16} />, category: 'network' },
   // Security
   { id: 'hash', title: 'Hash Tool', icon: <Hash size={16} />, category: 'security' },
   { id: 'ssl', title: 'SSL Inspector', icon: <Lock size={16} />, category: 'security' },
@@ -66,6 +67,7 @@ const apps: AppItem[] = [
   { id: 'system-overview', title: 'System Overview', icon: <Monitor size={16} />, category: 'system' },
   { id: 'logs', title: 'Log Analyzer', icon: <ScrollText size={16} />, category: 'system' },
   { id: 'file-hash', title: 'File Hash Check', icon: <CheckSquare size={16} />, category: 'system' },
+  { id: 'app-scheduler', title: 'App Scheduler', icon: <Clock size={16} />, category: 'system' },
   // Developer
   { id: 'api-tester', title: 'API Tester', icon: <Beaker size={16} />, category: 'developer' },
   { id: 'formatter', title: 'Data Formatter', icon: <Braces size={16} />, category: 'developer' },

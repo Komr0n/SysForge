@@ -27,7 +27,7 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-type Tab = 'provider' | 'voice' | 'skills' | 'audit';
+type Tab = 'provider' | 'voice' | 'thresholds' | 'skills' | 'audit';
 
 export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
   const { jarvis, setJarvisConfig, updateCloudProvider } = useSettingsStore((s) => ({
@@ -483,6 +483,111 @@ export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
                       style={{ width: '100%' }} />
                   </Field>
                 </div>
+
+                {/* Follow-up Listening Window */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10, borderTop: '1px solid var(--border-color)', paddingTop: 12 }}>
+                  <div style={{ color: 'var(--text-muted)', fontSize: 10, letterSpacing: 1 }}>ОКНО ОЖИДАНИЯ ПРОДОЛЖЕНИЯ (FOLLOW-UP)</div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                    <input type="checkbox" checked={cfg.voice.followUpListening ?? true}
+                      onChange={(e) => updateVoice({ followUpListening: e.target.checked })} />
+                    Слушать продолжение после выполнения команды (без слова "Джарвис")
+                  </label>
+                  <Field label={`Длительность ожидания: ${((cfg.voice.followUpWindowMs ?? 4000) / 1000).toFixed(1)} сек`}>
+                    <input type="range" min={2000} max={8000} step={500} value={cfg.voice.followUpWindowMs ?? 4000}
+                      onChange={(e) => updateVoice({ followUpWindowMs: parseInt(e.target.value, 10) })}
+                      style={{ width: '100%' }} />
+                  </Field>
+                </div>
+              </div>
+            )}
+
+            {/* ── Thresholds Tab ── */}
+            {tab === 'thresholds' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                <div style={{ color: 'var(--text-muted)', fontSize: 10, letterSpacing: 1 }}>
+                  ПОРОГОВЫЕ ГОЛОСОВЫЕ ПРЕДУПРЕЖДЕНИЯ СИСТЕМЫ
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11, color: 'var(--text-primary)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={cfg.thresholds?.enabled ?? true}
+                    onChange={(e) => update({
+                      thresholds: {
+                        ...(cfg.thresholds || { cpuPercent: 90, ramPercent: 90, diskPercent: 90, cooldownMs: 300000 }),
+                        enabled: e.target.checked,
+                      },
+                    })}
+                  />
+                  Включить автоматический мониторинг перегрузки CPU / RAM / Диска
+                </label>
+
+                <Field label={`Порог загрузки CPU: ${cfg.thresholds?.cpuPercent ?? 90}%`}>
+                  <input
+                    type="range"
+                    min={50}
+                    max={99}
+                    step={5}
+                    value={cfg.thresholds?.cpuPercent ?? 90}
+                    onChange={(e) => update({
+                      thresholds: {
+                        ...(cfg.thresholds || { ramPercent: 90, diskPercent: 90, cooldownMs: 300000, enabled: true }),
+                        cpuPercent: parseInt(e.target.value, 10),
+                      },
+                    })}
+                    style={{ width: '100%' }}
+                  />
+                </Field>
+
+                <Field label={`Порог заполнения RAM: ${cfg.thresholds?.ramPercent ?? 90}%`}>
+                  <input
+                    type="range"
+                    min={50}
+                    max={99}
+                    step={5}
+                    value={cfg.thresholds?.ramPercent ?? 90}
+                    onChange={(e) => update({
+                      thresholds: {
+                        ...(cfg.thresholds || { cpuPercent: 90, diskPercent: 90, cooldownMs: 300000, enabled: true }),
+                        ramPercent: parseInt(e.target.value, 10),
+                      },
+                    })}
+                    style={{ width: '100%' }}
+                  />
+                </Field>
+
+                <Field label={`Порог заполнения диска: ${cfg.thresholds?.diskPercent ?? 90}%`}>
+                  <input
+                    type="range"
+                    min={50}
+                    max={99}
+                    step={5}
+                    value={cfg.thresholds?.diskPercent ?? 90}
+                    onChange={(e) => update({
+                      thresholds: {
+                        ...(cfg.thresholds || { cpuPercent: 90, ramPercent: 90, cooldownMs: 300000, enabled: true }),
+                        diskPercent: parseInt(e.target.value, 10),
+                      },
+                    })}
+                    style={{ width: '100%' }}
+                  />
+                </Field>
+
+                <Field label={`Интервал повтора предупреждений: ${Math.round((cfg.thresholds?.cooldownMs ?? 300000) / 60000)} мин`}>
+                  <input
+                    type="range"
+                    min={60000}
+                    max={900000}
+                    step={60000}
+                    value={cfg.thresholds?.cooldownMs ?? 300000}
+                    onChange={(e) => update({
+                      thresholds: {
+                        ...(cfg.thresholds || { cpuPercent: 90, ramPercent: 90, diskPercent: 90, enabled: true }),
+                        cooldownMs: parseInt(e.target.value, 10),
+                      },
+                    })}
+                    style={{ width: '100%' }}
+                  />
+                </Field>
               </div>
             )}
 
@@ -492,6 +597,35 @@ export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 12 }}>
                   <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>РЕЕСТР НАВЫКОВ ДЖАРВИСА</span>
                   <div style={{ flex: 1 }} />
+                  <label
+                    style={{
+                      padding: '5px 10px', background: 'transparent',
+                      border: '1px solid var(--border-color)', borderRadius: 4,
+                      color: 'var(--text-muted)', fontFamily: 'var(--font-mono)',
+                      fontSize: 11, cursor: 'pointer',
+                    }}
+                    title="Импортировать навык из JSON"
+                  >
+                    📥 Импорт
+                    <input
+                      type="file"
+                      accept=".json"
+                      style={{ display: 'none' }}
+                      onChange={async (e) => {
+                        const file = e.target.files?.[0];
+                        if (file) {
+                          const text = await file.text();
+                          try {
+                            await skillRegistry.importSkillFromContent(text);
+                            const list = await skillRegistry.listSkills();
+                            setSkills(list);
+                          } catch (err) {
+                            alert((err as Error).message);
+                          }
+                        }
+                      }}
+                    />
+                  </label>
                   <button
                     onClick={() => { setEditingSkill(null); setSkillCreatorOpen(true); }}
                     style={{
@@ -603,6 +737,17 @@ function SkillRow({
   onEdit?: () => void;
   onDelete?: () => void;
 }) {
+  const handleExport = () => {
+    const data = JSON.stringify(skill, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${skill.id}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8,
@@ -617,6 +762,12 @@ function SkillRow({
           {skill.id} · {skill.steps.length} шаг(а/ов) · выполнен {skill.executionCount} раз
         </div>
       </div>
+      <button onClick={handleExport} title="Экспортировать навык в JSON" style={{
+        padding: '3px 8px', background: 'transparent',
+        border: '1px solid var(--border-color)', borderRadius: 3,
+        color: 'var(--text-muted)', fontFamily: 'var(--font-mono)',
+        fontSize: 10, cursor: 'pointer',
+      }}>💾</button>
       {onEdit && (
         <button onClick={onEdit} style={{
           padding: '3px 8px', background: 'transparent',

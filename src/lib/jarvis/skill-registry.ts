@@ -146,6 +146,29 @@ export class SkillRegistry {
     }
   }
 
+  async exportSkill(id: string): Promise<string> {
+    const skill = await this.loadSkill(id);
+    if (!skill) {
+      const builtin = this.getBuiltinSkills().find((s) => s.id === id);
+      if (builtin) return JSON.stringify(builtin, null, 2);
+      throw new Error(`Навык "${id}" не найден.`);
+    }
+    return JSON.stringify(skill, null, 2);
+  }
+
+  async importSkillFromContent(content: string): Promise<Skill> {
+    const skill = JSON.parse(content) as Skill;
+    if (!skill.id || !skill.displayName || !Array.isArray(skill.steps)) {
+      throw new Error('Некорректная структура файла навыка (отсутствуют id, displayName или steps).');
+    }
+    const validation = validateSkillSandbox(skill);
+    if (!validation.valid) {
+      throw new Error(`Импорт отклонён: навык требует уровень безопасности выше заявленного (${validation.violatingTool})`);
+    }
+    await this.saveSkill(skill);
+    return skill;
+  }
+
   /** Создать новый навык с дефолтными значениями */
   createEmpty(): Skill {
     return {

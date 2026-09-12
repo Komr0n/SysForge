@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Terminal, Settings, Maximize, Minimize, Wifi, Mic, MicOff, MessageSquare, Bot } from 'lucide-react';
+import { Terminal, Settings, Maximize, Minimize, Wifi, Mic, MicOff, MessageSquare, Bot, FileText } from 'lucide-react';
 import SettingsPanel from '../Settings/SettingsPanel';
 import { useTauri } from '../../hooks/useTauri';
 import { JarvisOrb, STATE_LABELS } from '../JarvisUI/JarvisOrb';
@@ -11,6 +11,8 @@ interface StatusBarProps {
   onToggleChat?: () => void;
   onToggleMic?: () => void;
   onOpenJarvisSettings?: () => void;
+  onToggleLog?: () => void;
+  isLogOpen?: boolean;
 }
 
 export default function StatusBar({
@@ -19,6 +21,8 @@ export default function StatusBar({
   onToggleChat,
   onToggleMic,
   onOpenJarvisSettings,
+  onToggleLog,
+  isLogOpen = false,
 }: StatusBarProps) {
   const { invoke, isAvailable } = useTauri();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -148,6 +152,26 @@ export default function StatusBar({
 
         {/* Right: Actions */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {/* Jarvis Log Toggle */}
+          {onToggleLog && (
+            <button
+              onClick={onToggleLog}
+              style={{
+                background: isLogOpen ? 'rgba(79,70,229,0.2)' : 'transparent',
+                border: `1px solid ${isLogOpen ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                borderRadius: 4,
+                padding: '3px 6px',
+                color: isLogOpen ? 'var(--accent-primary)' : 'var(--text-muted)',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              title="Журнал команд Джарвиса"
+            >
+              <FileText size={12} />
+            </button>
+          )}
+
           {/* Quick Jarvis Mic Trigger */}
           {onToggleMic && (
             <button

@@ -44,6 +44,15 @@ export interface JarvisConfig {
     ttsRate: number;
     ttsPitch: number;
     sttEnabled: boolean;
+    followUpListening: boolean;
+    followUpWindowMs: number;
+  };
+  thresholds: {
+    cpuPercent?: number;
+    ramPercent?: number;
+    diskPercent?: number;
+    enabled: boolean;
+    cooldownMs: number;
   };
 }
 
@@ -180,6 +189,15 @@ export const DEFAULT_JARVIS_CONFIG: JarvisConfig = {
     ttsRate: 1.0,
     ttsPitch: 1.0,
     sttEnabled: true,
+    followUpListening: true,
+    followUpWindowMs: 4000,
+  },
+  thresholds: {
+    cpuPercent: 90,
+    ramPercent: 90,
+    diskPercent: 90,
+    enabled: true,
+    cooldownMs: 5 * 60 * 1000,
   },
 };
 
@@ -294,7 +312,17 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sysforge-settings',
       storage: createJSONStorage(() => tauriStorageAdapter),
-      partialize: (state) => state,
+      partialize: (state) => {
+        const { apiKeys: _ignoredApiKeys, ...rest } = state;
+        return {
+          ...rest,
+          jarvis: {
+            ...rest.jarvis,
+            cloud: { ...rest.jarvis.cloud, apiKey: '' },
+            cloudProviders: (rest.jarvis.cloudProviders || []).map((p) => ({ ...p, apiKey: '' })),
+          },
+        };
+      },
       merge: (persisted, current) => {
         const saved = persisted as Partial<SettingsState> & {
           performance?: Partial<SettingsState['performance']>;
@@ -316,9 +344,12 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }
 
-        if (saved.apiKeys) {
-          merged.apiKeys = { ...current.apiKeys, ...saved.apiKeys };
-        }
+        // Preserve in-memory apiKeys from current session (never write/read to disk)
+        merged.apiKeys = {
+          abuseipdb: current.apiKeys.abuseipdb || saved.apiKeys?.abuseipdb || '',
+          virustotal: current.apiKeys.virustotal || saved.apiKeys?.virustotal || '',
+          nvd: current.apiKeys.nvd || saved.apiKeys?.nvd || '',
+        };
 
         if (saved.widgetPositions) {
           merged.widgetPositions = { ...current.widgetPositions, ...saved.widgetPositions };
@@ -333,7 +364,7 @@ export const useSettingsStore = create<SettingsState>()(
                 return {
                   ...def,
                   ...foundSaved,
-                  apiKey: foundSaved?.apiKey || foundCurrent?.apiKey || '',
+                  apiKey: foundCurrent?.apiKey || foundSaved?.apiKey || '',
                 };
               })
             : currentProviders;
@@ -345,9 +376,18 @@ export const useSettingsStore = create<SettingsState>()(
             cloud: {
               ...DEFAULT_JARVIS_CONFIG.cloud,
               ...saved.jarvis.cloud,
-              apiKey: saved.jarvis.cloud?.apiKey || current.jarvis.cloud.apiKey || '',
+              apiKey: current.jarvis.cloud.apiKey || saved.jarvis.cloud?.apiKey || '',
             },
-            voice: { ...DEFAULT_JARVIS_CONFIG.voice, ...saved.jarvis.voice },
+            voice: {
+              ...DEFAULT_JARVIS_CONFIG.voice,
+              ...saved.jarvis.voice,
+              followUpListening: saved.jarvis.voice?.followUpListening ?? DEFAULT_JARVIS_CONFIG.voice.followUpListening,
+              followUpWindowMs: saved.jarvis.voice?.followUpWindowMs ?? DEFAULT_JARVIS_CONFIG.voice.followUpWindowMs,
+            },
+            thresholds: {
+              ...DEFAULT_JARVIS_CONFIG.thresholds,
+              ...saved.jarvis.thresholds,
+            },
             cloudProviders: savedProviders,
             autoFallbackOnRateLimit: saved.jarvis.autoFallbackOnRateLimit ?? true,
             activeCloudProviderId: saved.jarvis.activeCloudProviderId ?? 'gemini',

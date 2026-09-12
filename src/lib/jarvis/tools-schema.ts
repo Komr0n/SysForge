@@ -39,6 +39,7 @@ export const JARVIS_TOOLS: JarvisTool[] = [
             'hash', 'ssl', 'password', 'ip-intel', 'subnet', 'jwt', 'cve',
             'processes', 'system-overview', 'logs', 'file-hash',
             'api-tester', 'formatter', 'encoder', 'regex', 'snippets', 'diff',
+            'app-scheduler', 'net-processes',
           ],
         },
       },
@@ -56,6 +57,33 @@ export const JARVIS_TOOLS: JarvisTool[] = [
         appId: { type: 'string', description: 'ID приложения для закрытия' },
       },
       required: ['appId'],
+    },
+  },
+  {
+    name: 'close_os_app',
+    description: 'Закрыть запущенное приложение Windows по имени процесса (chrome, telegram, calculator и т.д.) — в отличие от close_app, это закрывает саму программу в ОС, а не окно мини-программы SysForge',
+    safetyLevel: 'requires_confirmation',
+    requiresAudit: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        appName: { type: 'string', description: 'Имя или часть имени процесса для закрытия' },
+      },
+      required: ['appName'],
+    },
+  },
+  {
+    name: 'schedule_close_app',
+    description: 'Запланировать закрытие приложения через заданное время',
+    safetyLevel: 'safe',
+    requiresAudit: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        appName: { type: 'string', description: 'Имя или часть имени процесса для закрытия' },
+        delayMinutes: { type: 'number', description: 'Задержка в минутах перед закрытием' },
+      },
+      required: ['appName', 'delayMinutes'],
     },
   },
   {
@@ -218,19 +246,6 @@ export const JARVIS_TOOLS: JarvisTool[] = [
         isPid: { type: 'boolean', description: 'true если target это PID' },
       },
       required: ['target'],
-    },
-  },
-  {
-    name: 'delete_file',
-    description: 'Удалить файл в безопасной директории (требует подтверждения)',
-    safetyLevel: 'requires_confirmation',
-    requiresAudit: true,
-    parameters: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Путь к файлу' },
-      },
-      required: ['path'],
     },
   },
   {

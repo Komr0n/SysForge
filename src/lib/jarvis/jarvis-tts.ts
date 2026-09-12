@@ -216,3 +216,8 @@ export function getWakePhrase(lang: string): string {
   const pool = lang.startsWith('ru') ? WAKE_RESPONSES_RU : WAKE_RESPONSES_EN;
   return pool[Math.floor(Math.random() * pool.length)];
 }
+
+/** Утилита быстрого озвучивания текста голосом Джарвиса */
+export async function speakText(text: string): Promise<void> {
+  return getJarvisTTS().speak(text);
+}

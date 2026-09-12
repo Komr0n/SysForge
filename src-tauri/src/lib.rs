@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Signal, System};
-use tauri::State;
+use tauri::{Emitter, Manager, State};
 use tokio::time::timeout;
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -76,11 +76,41 @@ pub struct PrevNetworkSnapshot {
     pub interfaces: HashMap<String, (u64, u64)>, // (rx_total, tx_total)
 }
 
+pub struct SchedulerState {
+    pub timers: Mutex<HashMap<String, tokio::task::JoinHandle<()>>>,
+}
+
+#[derive(Clone, Serialize)]
+pub struct ScheduledClose {
+    pub id: String,
+    pub app_name: String,
+    pub fires_at_ms: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct ProcessConnectionInfo {
+    pub pid: u32,
+    pub name: String,
+    pub connection_count: usize,
+    pub established_count: usize,
+    pub remote_endpoints: Vec<String>,
+    pub rx_bytes_per_sec: u64,
+    pub tx_bytes_per_sec: u64,
+    pub io_read_bytes_per_sec: u64,
+    pub io_write_bytes_per_sec: u64,
+}
+
+pub struct PrevProcessNetwork {
+    pub timestamp: Instant,
+    pub entries: HashMap<u32, (u64, u64)>, // pid -> (bytes_in, bytes_out)
+}
+
 pub struct AppState {
     pub system: Mutex<System>,
     pub networks: Mutex<Networks>,
     pub prev_network: Mutex<PrevNetworkSnapshot>,
     pub jarvis_registry: Mutex<PhraseRegistry>,
+    pub prev_process_network: Mutex<PrevProcessNetwork>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -810,6 +840,527 @@ async fn inspect_ssl(host: String) -> Result<String, String> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn close_os_app_by_name(state: State<AppState>, name: String) -> Result<String, String> {
+    let query = name.trim().to_lowercase();
+    if query.is_empty() {
+        return Err("Имя приложения не указано".into());
+    }
+
+    // Build alias list for common Windows applications (e.g. UWP Calculator)
+    let mut search_terms = vec![query.clone()];
+    if query.contains("calc") || query.contains("кальк") {
+        search_terms.push("calculatorapp".to_string());
+        search_terms.push("calculator".to_string());
+        search_terms.push("calc.exe".to_string());
+        search_terms.push("win32calc".to_string());
+    } else if query.contains("notepad") || query.contains("блокнот") {
+        search_terms.push("notepad.exe".to_string());
+        search_terms.push("notepad".to_string());
+    } else if query.contains("chrome") || query.contains("хром") {
+        search_terms.push("chrome.exe".to_string());
+    } else if query.contains("paint") || query.contains("паинт") {
+        search_terms.push("mspaint.exe".to_string());
+        search_terms.push("mspaint".to_string());
+    } else if query.contains("taskmgr") || query.contains("диспетчер") {
+        search_terms.push("taskmgr.exe".to_string());
+    }
+
+    let mut sys = state.system.lock().unwrap();
+    sys.refresh_processes();
+
+    let mut matches: Vec<(sysinfo::Pid, String)> = Vec::new();
+    for (pid, p) in sys.processes() {
+        let p_name_lower = p.name().to_lowercase();
+        if search_terms.iter().any(|term| p_name_lower.contains(term)) {
+            matches.push((*pid, p.name().to_string()));
+        }
+    }
+
+    let mut closed = Vec::new();
+
+    // 1. Terminate matching PIDs via sysinfo and taskkill
+    for (pid, proc_name) in &matches {
+        if pid.as_u32() <= 4 {
+            continue;
+        }
+        let mut killed = false;
+        if let Some(process) = sys.process(*pid) {
+            killed = process.kill_with(Signal::Kill).unwrap_or(false) || process.kill();
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            use std::process::Command;
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+            let status = Command::new("taskkill")
+                .args(&["/F", "/PID", &pid.as_u32().to_string()])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            if let Ok(s) = status {
+                if s.success() {
+                    killed = true;
+                }
+            }
+        }
+
+        if killed {
+            closed.push(proc_name.clone());
+            println!("[AUDIT] Closed by name: {} (PID {})", proc_name, pid.as_u32());
+        }
+    }
+
+    // 2. Fallback: on Windows, directly attempt taskkill /F /T /IM for each search term
+    #[cfg(target_os = "windows")]
+    {
+        use std::process::Command;
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        for term in &search_terms {
+            let im_name = if term.ends_with(".exe") {
+                term.clone()
+            } else {
+                format!("{}.exe", term)
+            };
+            let status = Command::new("taskkill")
+                .args(&["/F", "/T", "/IM", &im_name])
+                .creation_flags(CREATE_NO_WINDOW)
+                .status();
+            if let Ok(s) = status {
+                if s.success() && !closed.contains(&im_name) {
+                    closed.push(im_name);
+                }
+            }
+        }
+    }
+
+    if closed.is_empty() {
+        if matches.is_empty() {
+            Err(format!("Процесс '{}' не найден среди запущенных.", name))
+        } else {
+            Err(format!("Не удалось закрыть '{}' — отказано в доступе.", name))
+        }
+    } else {
+        Ok(format!("Закрыто: {}", closed.join(", ")))
+    }
+}
+
+#[tauri::command]
+async fn schedule_close_app(
+    app_handle: tauri::AppHandle,
+    scheduler: State<'_, SchedulerState>,
+    app_name: String,
+    delay_seconds: u64,
+) -> Result<ScheduledClose, String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let fires_at_ms = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64)
+        + delay_seconds * 1000;
+    let handle_id = id.clone();
+    let name_clone = app_name.clone();
+    let app_handle_clone = app_handle.clone();
+
+    let handle = tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(delay_seconds)).await;
+        let state: State<AppState> = app_handle_clone.state();
+        let mut sys = state.system.lock().unwrap();
+        sys.refresh_processes();
+        let query = name_clone.to_lowercase();
+        for (pid, p) in sys.processes() {
+            if pid.as_u32() > 4 && p.name().to_lowercase().contains(&query) {
+                let _ = p.kill_with(Signal::Kill);
+            }
+        }
+        let _ = app_handle_clone.emit("jarvis:timer-fired", &name_clone);
+    });
+
+    scheduler.timers.lock().unwrap().insert(handle_id, handle);
+    Ok(ScheduledClose {
+        id,
+        app_name,
+        fires_at_ms,
+    })
+}
+
+#[tauri::command]
+fn cancel_scheduled_close(scheduler: State<SchedulerState>, id: String) -> Result<(), String> {
+    if let Some(handle) = scheduler.timers.lock().unwrap().remove(&id) {
+        handle.abort();
+        Ok(())
+    } else {
+        Err("Таймер не найден".into())
+    }
+}
+
+#[tauri::command]
+fn set_tray_icon(app: tauri::AppHandle, active: bool) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let icon_path = if active {
+            "icons/tray-listening.png"
+        } else {
+            "icons/tray-idle.png"
+        };
+        if let Ok(img) = tauri::image::Image::from_path(icon_path) {
+            let _ = tray.set_icon(Some(img));
+        }
+    }
+    let _ = active;
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+mod win_net {
+    use std::ffi::c_void;
+
+    pub const AF_INET: u32 = 2;
+    pub const AF_INET6: u32 = 23;
+    pub const TCP_TABLE_OWNER_PID_ALL: i32 = 5;
+    pub const MIB_TCP_STATE_ESTAB: u32 = 5;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct MIB_TCPROW_OWNER_PID {
+        pub dw_state: u32,
+        pub dw_local_addr: u32,
+        pub dw_local_port: u32,
+        pub dw_remote_addr: u32,
+        pub dw_remote_port: u32,
+        pub dw_owning_pid: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct MIB_TCP6ROW_OWNER_PID {
+        pub uc_local_addr: [u8; 16],
+        pub dw_local_scope_id: u32,
+        pub dw_local_port: u32,
+        pub uc_remote_addr: [u8; 16],
+        pub dw_remote_scope_id: u32,
+        pub dw_remote_port: u32,
+        pub dw_state: u32,
+        pub dw_owning_pid: u32,
+    }
+
+    #[repr(C)]
+    pub struct TCP_ESTATS_DATA_RW_v0 {
+        pub enable_collection: u8,
+    }
+
+    #[repr(C)]
+    #[derive(Default)]
+    pub struct TCP_ESTATS_DATA_ROD_v0 {
+        pub data_bytes_out: u64,
+        pub data_segs_out: u64,
+        pub data_bytes_in: u64,
+        pub data_segs_in: u64,
+        pub segs_out: u64,
+        pub segs_in: u64,
+        pub soft_errors: u32,
+        pub soft_error_reason: u32,
+    }
+
+    #[link(name = "iphlpapi")]
+    extern "system" {
+        pub fn GetExtendedTcpTable(
+            p_tcp_table: *mut c_void,
+            pdw_size: *mut u32,
+            b_order: i32,
+            ul_af: u32,
+            table_class: i32,
+            reserved: u32,
+        ) -> u32;
+
+        pub fn SetPerTcpConnectionEStats(
+            row: *const c_void,
+            estats_type: i32,
+            rw: *const c_void,
+            rw_version: u32,
+            rw_size: u32,
+            offset: u32,
+        ) -> u32;
+
+        pub fn GetPerTcpConnectionEStats(
+            row: *const c_void,
+            estats_type: i32,
+            rw: *mut c_void,
+            rw_version: u32,
+            rw_size: u32,
+            ros: *mut c_void,
+            ros_version: u32,
+            ros_size: u32,
+            rod: *mut c_void,
+            rod_version: u32,
+            rod_size: u32,
+        ) -> u32;
+    }
+}
+
+#[tauri::command]
+async fn get_network_connections_by_process(
+    state: State<'_, AppState>,
+) -> Result<Vec<ProcessConnectionInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        let mut pid_map: HashMap<u32, (usize, usize, Vec<String>)> = HashMap::new();
+        let mut pid_traffic: HashMap<u32, (u64, u64)> = HashMap::new();
+
+        // 1. IPv4 TCP Connections
+        let mut size_v4 = 0u32;
+        unsafe {
+            win_net::GetExtendedTcpTable(
+                std::ptr::null_mut(),
+                &mut size_v4,
+                1,
+                win_net::AF_INET,
+                win_net::TCP_TABLE_OWNER_PID_ALL,
+                0,
+            );
+        }
+        if size_v4 > 0 {
+            let mut buf_v4 = vec![0u8; size_v4 as usize];
+            let ret = unsafe {
+                win_net::GetExtendedTcpTable(
+                    buf_v4.as_mut_ptr() as *mut std::ffi::c_void,
+                    &mut size_v4,
+                    1,
+                    win_net::AF_INET,
+                    win_net::TCP_TABLE_OWNER_PID_ALL,
+                    0,
+                )
+            };
+            if ret == 0 && buf_v4.len() >= std::mem::size_of::<u32>() {
+                let num_entries = unsafe { *(buf_v4.as_ptr() as *const u32) };
+                let row_size = std::mem::size_of::<win_net::MIB_TCPROW_OWNER_PID>();
+                let rows_ptr = unsafe {
+                    buf_v4
+                        .as_ptr()
+                        .add(std::mem::size_of::<u32>()) as *const win_net::MIB_TCPROW_OWNER_PID
+                };
+                for i in 0..num_entries as usize {
+                    if (i + 1) * row_size + std::mem::size_of::<u32>() <= buf_v4.len() {
+                        let row = unsafe { *rows_ptr.add(i) };
+                        let pid = row.dw_owning_pid;
+                        let entry = pid_map.entry(pid).or_insert((0, 0, Vec::new()));
+                        entry.0 += 1;
+
+                        if row.dw_state == win_net::MIB_TCP_STATE_ESTAB {
+                            entry.1 += 1;
+
+                            let rw = win_net::TCP_ESTATS_DATA_RW_v0 { enable_collection: 1 };
+                            unsafe {
+                                win_net::SetPerTcpConnectionEStats(
+                                    &row as *const _ as *const std::ffi::c_void,
+                                    0, // TcpConnectionEstatsData
+                                    &rw as *const _ as *const std::ffi::c_void,
+                                    0,
+                                    std::mem::size_of::<win_net::TCP_ESTATS_DATA_RW_v0>() as u32,
+                                    0,
+                                );
+                                let mut rod = win_net::TCP_ESTATS_DATA_ROD_v0::default();
+                                let get_res = win_net::GetPerTcpConnectionEStats(
+                                    &row as *const _ as *const std::ffi::c_void,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    0,
+                                    &mut rod as *mut _ as *mut std::ffi::c_void,
+                                    0,
+                                    std::mem::size_of::<win_net::TCP_ESTATS_DATA_ROD_v0>() as u32,
+                                );
+                                if get_res == 0 {
+                                    let t = pid_traffic.entry(pid).or_insert((0, 0));
+                                    t.0 = t.0.saturating_add(rod.data_bytes_in);
+                                    t.1 = t.1.saturating_add(rod.data_bytes_out);
+                                }
+                            }
+                        }
+
+                        if row.dw_remote_addr != 0 && entry.2.len() < 5 {
+                            let remote_ip = std::net::Ipv4Addr::from(row.dw_remote_addr.to_ne_bytes());
+                            let remote_port = u16::from_be((row.dw_remote_port & 0xffff) as u16);
+                            let ep = format!("{}:{}", remote_ip, remote_port);
+                            if !entry.2.contains(&ep) {
+                                entry.2.push(ep);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. IPv6 TCP Connections
+        let mut size_v6 = 0u32;
+        unsafe {
+            win_net::GetExtendedTcpTable(
+                std::ptr::null_mut(),
+                &mut size_v6,
+                1,
+                win_net::AF_INET6,
+                win_net::TCP_TABLE_OWNER_PID_ALL,
+                0,
+            );
+        }
+        if size_v6 > 0 {
+            let mut buf_v6 = vec![0u8; size_v6 as usize];
+            let ret = unsafe {
+                win_net::GetExtendedTcpTable(
+                    buf_v6.as_mut_ptr() as *mut std::ffi::c_void,
+                    &mut size_v6,
+                    1,
+                    win_net::AF_INET6,
+                    win_net::TCP_TABLE_OWNER_PID_ALL,
+                    0,
+                )
+            };
+            if ret == 0 && buf_v6.len() >= std::mem::size_of::<u32>() {
+                let num_entries = unsafe { *(buf_v6.as_ptr() as *const u32) };
+                let row_size = std::mem::size_of::<win_net::MIB_TCP6ROW_OWNER_PID>();
+                let rows_ptr = unsafe {
+                    buf_v6
+                        .as_ptr()
+                        .add(std::mem::size_of::<u32>()) as *const win_net::MIB_TCP6ROW_OWNER_PID
+                };
+                for i in 0..num_entries as usize {
+                    if (i + 1) * row_size + std::mem::size_of::<u32>() <= buf_v6.len() {
+                        let row = unsafe { *rows_ptr.add(i) };
+                        let pid = row.dw_owning_pid;
+                        let entry = pid_map.entry(pid).or_insert((0, 0, Vec::new()));
+                        entry.0 += 1;
+
+                        if row.dw_state == win_net::MIB_TCP_STATE_ESTAB {
+                            entry.1 += 1;
+
+                            let rw = win_net::TCP_ESTATS_DATA_RW_v0 { enable_collection: 1 };
+                            unsafe {
+                                win_net::SetPerTcpConnectionEStats(
+                                    &row as *const _ as *const std::ffi::c_void,
+                                    0,
+                                    &rw as *const _ as *const std::ffi::c_void,
+                                    0,
+                                    std::mem::size_of::<win_net::TCP_ESTATS_DATA_RW_v0>() as u32,
+                                    0,
+                                );
+                                let mut rod = win_net::TCP_ESTATS_DATA_ROD_v0::default();
+                                let get_res = win_net::GetPerTcpConnectionEStats(
+                                    &row as *const _ as *const std::ffi::c_void,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    0,
+                                    std::ptr::null_mut(),
+                                    0,
+                                    0,
+                                    &mut rod as *mut _ as *mut std::ffi::c_void,
+                                    0,
+                                    std::mem::size_of::<win_net::TCP_ESTATS_DATA_ROD_v0>() as u32,
+                                );
+                                if get_res == 0 {
+                                    let t = pid_traffic.entry(pid).or_insert((0, 0));
+                                    t.0 = t.0.saturating_add(rod.data_bytes_in);
+                                    t.1 = t.1.saturating_add(rod.data_bytes_out);
+                                }
+                            }
+                        }
+
+                        let is_all_zero = row.uc_remote_addr.iter().all(|&b| b == 0);
+                        if !is_all_zero && entry.2.len() < 5 {
+                            let remote_ip = std::net::Ipv6Addr::from(row.uc_remote_addr);
+                            let remote_port = u16::from_be((row.dw_remote_port & 0xffff) as u16);
+                            let ep = format!("[{}]:{}", remote_ip, remote_port);
+                            if !entry.2.contains(&ep) {
+                                entry.2.push(ep);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut sys = state.system.lock().unwrap();
+        sys.refresh_processes();
+
+        let mut prev_net = state.prev_process_network.lock().unwrap();
+        let now = Instant::now();
+        let elapsed = now.duration_since(prev_net.timestamp).as_secs_f64().max(0.5);
+        let mut new_net_map: HashMap<u32, (u64, u64)> = HashMap::new();
+
+        let mut result: Vec<ProcessConnectionInfo> = pid_map
+            .into_iter()
+            .map(|(pid, (total, established, remotes))| {
+                let proc_handle = sys.process(sysinfo::Pid::from(pid as usize));
+                let proc_name = proc_handle
+                    .map(|p| p.name().to_string())
+                    .unwrap_or_else(|| format!("PID {}", pid));
+
+                let (current_in, current_out) = if let Some(&traffic) = pid_traffic.get(&pid) {
+                    if traffic.0 > 0 || traffic.1 > 0 {
+                        traffic
+                    } else if let Some(p) = proc_handle {
+                        let du = p.disk_usage();
+                        (du.total_read_bytes, du.total_written_bytes)
+                    } else {
+                        (0, 0)
+                    }
+                } else if let Some(p) = proc_handle {
+                    let du = p.disk_usage();
+                    (du.total_read_bytes, du.total_written_bytes)
+                } else {
+                    (0, 0)
+                };
+                new_net_map.insert(pid, (current_in, current_out));
+
+                let (rx_rate, tx_rate) = if let Some(&(prev_in, prev_out)) = prev_net.entries.get(&pid) {
+                    let dr = current_in.saturating_sub(prev_in);
+                    let dw = current_out.saturating_sub(prev_out);
+                    (
+                        (dr as f64 / elapsed).round() as u64,
+                        (dw as f64 / elapsed).round() as u64,
+                    )
+                } else {
+                    (0, 0)
+                };
+
+                ProcessConnectionInfo {
+                    pid,
+                    name: proc_name,
+                    connection_count: total,
+                    established_count: established,
+                    remote_endpoints: remotes,
+                    rx_bytes_per_sec: rx_rate,
+                    tx_bytes_per_sec: tx_rate,
+                    io_read_bytes_per_sec: rx_rate,
+                    io_write_bytes_per_sec: tx_rate,
+                }
+            })
+            .collect();
+
+        prev_net.timestamp = now;
+        prev_net.entries = new_net_map;
+
+        result.sort_by(|a, b| {
+            let a_total = a.rx_bytes_per_sec + a.tx_bytes_per_sec;
+            let b_total = b.rx_bytes_per_sec + b.tx_bytes_per_sec;
+            b_total.cmp(&a_total).then(b.connection_count.cmp(&a.connection_count))
+        });
+        Ok(result)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = state;
+        Ok(vec![])
+    }
+}
+
 // Argument parsers for terminal commands
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -940,6 +1491,13 @@ pub fn run() {
                 interfaces: HashMap::new(),
             }),
             jarvis_registry: Mutex::new(create_initial_registry()),
+            prev_process_network: Mutex::new(PrevProcessNetwork {
+                timestamp: Instant::now(),
+                entries: HashMap::new(),
+            }),
+        })
+        .manage(SchedulerState {
+            timers: Mutex::new(HashMap::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
@@ -963,6 +1521,11 @@ pub fn run() {
             send_wol_packet,
             lookup_ip_intel,
             inspect_ssl,
+            close_os_app_by_name,
+            schedule_close_app,
+            cancel_scheduled_close,
+            set_tray_icon,
+            get_network_connections_by_process,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

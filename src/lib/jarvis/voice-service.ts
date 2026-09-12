@@ -17,6 +17,8 @@ export interface VoiceServiceConfig {
   ttsRate: number;
   ttsPitch: number;
   sttEnabled: boolean;
+  followUpListening?: boolean;
+  followUpWindowMs?: number;
   cloudProviders?: CloudProviderProfile[];
 }
 
@@ -63,7 +65,7 @@ export const isSpeechRecognitionSupported = !!SpeechRecognitionClass;
 export const isSpeechSynthesisSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 const COMMAND_WAIT_MS = 4500;
-const SPEECH_END_MS = 1400;
+const SPEECH_END_MS = 1600;
 
 export class VoiceService {
   private config: VoiceServiceConfig;
@@ -77,6 +79,10 @@ export class VoiceService {
 
   private commandWaitTimer: ReturnType<typeof setTimeout> | null = null;
   private speechEndTimer: ReturnType<typeof setTimeout> | null = null;
+  private followUpTimer: ReturnType<typeof setTimeout> | null = null;
+  public isFollowUpWindow = false;
+  private _pendingFollowUp = false;
+  private followUpListeners: ((isFollowUp: boolean) => void)[] = [];
   private interimAccumulator = '';
 
   private stateListeners: StateChangeListener[] = [];
@@ -126,13 +132,28 @@ export class VoiceService {
     return () => { this.errorListeners = this.errorListeners.filter((l) => l !== listener); };
   }
 
-  onVolume(listener: VolumeListener) {
+  onFollowUpChange(listener: (isFollowUp: boolean) => void) {
+    this.followUpListeners.push(listener);
+    return () => { this.followUpListeners = this.followUpListeners.filter((l) => l !== listener); };
+  }
+
+  /** Set pending follow-up flag — prevents speak().onEnd from restarting wake word */
+  setPendingFollowUp(pending: boolean) {
+    this._pendingFollowUp = pending;
+  }
+
+    onVolume(listener: VolumeListener) {
     this.volumeListeners.push(listener);
     return () => { this.volumeListeners = this.volumeListeners.filter((l) => l !== listener); };
   }
 
   private setState(state: JarvisState) {
     this._state = state;
+    if (typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window)) {
+      import('@tauri-apps/api/core').then(({ invoke }) => {
+        invoke('set_tray_icon', { active: state === 'listening' }).catch(() => {});
+      }).catch(() => {});
+    }
     this.stateListeners.forEach((l) => l(state));
   }
 
@@ -182,7 +203,56 @@ export class VoiceService {
 
   // ─── Manual Listen (кнопка 🎤) ──────────────────────────────────────────────
 
-  async startListening() {
+  async startFollowUpListening(windowMs?: number) {
+    if (this.config.sttEnabled === false) return;
+    if (this.config.followUpListening === false) return;
+
+    // Ensure mic access before starting
+    const permitted = await this.requestMicPermission();
+    if (!permitted) {
+      this._pendingFollowUp = false;
+      this.setState('idle');
+      return;
+    }
+
+    const duration = windowMs ?? this.config.followUpWindowMs ?? 4000;
+
+    this.stopAllTimers();
+    this.destroyRecognition();
+    this.lastCapturedText = '';
+    this.interimAccumulator = '';
+    this.isWakeWordMode = false;
+    this.isCommandMode = true;
+    this.isFollowUpWindow = true;
+    this._pendingFollowUp = false;
+    this.setState('listening');
+    this.followUpListeners.forEach((l) => l(true));
+
+    this.followUpTimer = setTimeout(() => {
+      if (this.isCommandMode && !this.lastCapturedText && !this.interimAccumulator) {
+        this.isFollowUpWindow = false;
+        this.followUpListeners.forEach((l) => l(false));
+        this.stopListening();
+      }
+    }, duration);
+
+    await this.audioRecorder.start({
+      onVolume: (vol) => this.notifyVolume(vol),
+      onSilence: () => {
+        if (this.isCommandMode && (this.lastCapturedText || this.interimAccumulator)) {
+          this.isFollowUpWindow = false;
+          this.followUpListeners.forEach((l) => l(false));
+          this.stopListening();
+        }
+      },
+    });
+
+    if (isSpeechRecognitionSupported) {
+      this.initRecognition(false);
+    }
+  }
+
+    async startListening() {
     if (!this.config.sttEnabled) {
       this.notifyError('Голосовой ввод отключён в настройках.');
       return;
@@ -229,6 +299,10 @@ export class VoiceService {
     const wasCommandMode = this.isCommandMode;
     this.isCommandMode = false;
     this.isWakeWordMode = false;
+    if (this.isFollowUpWindow) {
+      this.isFollowUpWindow = false;
+      this.followUpListeners.forEach((l) => l(false));
+    }
 
     // Останавливаем аудио-запись
     const audioBlob = await this.audioRecorder.stop();
@@ -274,6 +348,7 @@ export class VoiceService {
   private stopAllTimers() {
     if (this.commandWaitTimer) { clearTimeout(this.commandWaitTimer); this.commandWaitTimer = null; }
     if (this.speechEndTimer) { clearTimeout(this.speechEndTimer); this.speechEndTimer = null; }
+    if (this.followUpTimer) { clearTimeout(this.followUpTimer); this.followUpTimer = null; }
   }
 
   private initRecognition(continuous: boolean) {
@@ -422,6 +497,10 @@ export class VoiceService {
     this.destroyRecognition();
     this.audioRecorder.cancel();
     this.isCommandMode = false;
+    if (this.isFollowUpWindow) {
+      this.isFollowUpWindow = false;
+      this.followUpListeners.forEach((l) => l(false));
+    }
     this.interimAccumulator = '';
     this.lastCapturedText = '';
     this.commandListeners.forEach((l) => l(text));
@@ -444,7 +523,8 @@ export class VoiceService {
       quick: opts.quick,
       onEnd: () => {
         if (!opts.quick) this.setState('idle');
-        if (this.config.continuousWakeWord) {
+        // Don't restart wake word if follow-up listening is pending
+        if (!this._pendingFollowUp && this.config.continuousWakeWord) {
           setTimeout(() => this.startWakeWordListening(), 400);
         }
       },

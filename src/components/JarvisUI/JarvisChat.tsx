@@ -1,6 +1,6 @@
 // src/components/JarvisUI/JarvisChat.tsx
 // Главный компонент чата Джарвиса с голосовым вводом, визуальным индикатором громкости,
-// историей сессии, прямыми командами и созданием навыков
+// историей сессии, прямыми командами, созданием навыков и перетаскиванием
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -87,6 +87,11 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
   } | null>(null);
   const [micVolume, setMicVolume] = useState(0);
   const [interimText, setInterimText] = useState('');
+  const [isFollowUp, setIsFollowUp] = useState(false);
+
+  // Drag state for chat window
+  const [chatPos, setChatPos] = useState({ x: -1, y: -1 }); // -1 = use default position
+  const dragRef = useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -182,7 +187,7 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
     setSkillCreatorOpen(true);
   }, [messages]);
 
-  const handleCommand = useCallback(async (text: string) => {
+  const handleCommand = useCallback(async (text: string, wasVoiceTriggered = false) => {
     if (!text.trim()) return;
     if (processingRef.current) {
       console.warn('[JarvisChat] Command already processing, ignoring');
@@ -259,10 +264,24 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
         matchedVia: result.matchedVia,
       });
 
-      // TTS (JARVIS voice)
+      // TTS (JARVIS voice) & Follow-up listening
       if (result.response) {
         const vs = getVoiceService();
-        await vs.speak(result.response);
+        if (jarvis.voice.ttsEnabled) {
+          // Set pending follow-up flag BEFORE speaking so speak.onEnd doesn't restart wake-word
+          if (wasVoiceTriggered && (result.matchedVia as string) !== 'llm-error' && jarvis.voice.followUpListening !== false) {
+            vs.setPendingFollowUp(true);
+          }
+          await vs.speak(result.response);
+        }
+        // Start follow-up listening after TTS completes
+        if (wasVoiceTriggered && (result.matchedVia as string) !== 'llm-error' && jarvis.voice.followUpListening !== false) {
+          // Small delay for audio cleanup before starting mic again
+          await new Promise((r) => setTimeout(r, 250));
+          vs.startFollowUpListening(jarvis.voice.followUpWindowMs || 4000);
+        } else {
+          setJarvisState('idle');
+        }
       } else {
         setJarvisState('idle');
       }
@@ -310,9 +329,13 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
       if (isFinal) setInterimText('');
     });
 
+    const removeFollowUpListener = vs.onFollowUpChange((active) => {
+      setIsFollowUp(active);
+    });
+
     const removeCommandListener = vs.onCommand((cmd: string) => {
       setInterimText('');
-      handleCommandRef.current(cmd);
+      handleCommandRef.current(cmd, true);
     });
 
     if (jarvis.voice.continuousWakeWord) {
@@ -323,6 +346,7 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
       removeStateListener();
       removeVolumeListener();
       removeTranscriptListener();
+      removeFollowUpListener();
       removeCommandListener();
     };
   }, [jarvis.voice]);
@@ -371,6 +395,32 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
     }
   };
 
+  // Drag handlers for chat window
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = (e.target as HTMLElement).closest('[data-chat-container]') as HTMLElement;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const currentX = chatPos.x < 0 ? rect.left : chatPos.x;
+    const currentY = chatPos.y < 0 ? rect.top : chatPos.y;
+    dragRef.current = { startX: e.clientX, startY: e.clientY, originX: currentX, originY: currentY };
+
+    const handleMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      setChatPos({
+        x: dragRef.current.originX + (ev.clientX - dragRef.current.startX),
+        y: dragRef.current.originY + (ev.clientY - dragRef.current.startY),
+      });
+    };
+    const handleUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+  }, [chatPos]);
+
   const msgColors = {
     user: 'var(--accent-primary)',
     jarvis: 'var(--text-primary)',
@@ -379,39 +429,51 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
 
   const volBars = Math.min(10, Math.round(micVolume / 10));
 
+  // Chat position: default to bottom-right if not dragged yet
+  const chatStyle: React.CSSProperties = chatPos.x >= 0
+    ? { position: 'fixed', left: chatPos.x, top: chatPos.y }
+    : { position: 'fixed', bottom: 230, right: 16 };
+
   return (
     <>
-      <div style={{
-        position: 'fixed',
-        bottom: 230,
-        right: 16,
-        width: 'clamp(280px, 30vw, 380px)',
-        height: 'clamp(320px, 60vh, 520px)',
-        maxHeight: 'calc(100vh - 260px)',
-        zIndex: 5000,
-        background: 'rgba(8,10,16,0.94)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 8,
-        display: isOpen ? 'flex' : 'none',
-        flexDirection: 'column',
-        backdropFilter: 'blur(12px)',
-        boxShadow: '0 8px 40px rgba(0,0,0,0.65)',
-        fontFamily: 'var(--font-mono)',
-      }}>
-        {/* Header */}
-        <div style={{
-          padding: '10px 12px',
-          borderBottom: '1px solid var(--border-color)',
-          display: 'flex', alignItems: 'center', gap: 8,
-          flexShrink: 0,
+      <div
+        data-chat-container
+        style={{
+          ...chatStyle,
+          width: 'clamp(280px, 30vw, 380px)',
+          height: 'clamp(320px, 60vh, 520px)',
+          maxHeight: 'calc(100vh - 60px)',
+          zIndex: 5000,
+          background: 'rgba(8,10,16,0.94)',
+          border: '1px solid var(--border-color)',
+          borderRadius: 8,
+          display: isOpen ? 'flex' : 'none',
+          flexDirection: 'column',
+          backdropFilter: 'blur(12px)',
+          boxShadow: '0 8px 40px rgba(0,0,0,0.65)',
+          fontFamily: 'var(--font-mono)',
         }}>
-          <JarvisOrb state={jarvisState} size={16} />
-          <span style={{ color: 'var(--accent-primary)', fontSize: 11, fontWeight: 700, letterSpacing: 1 }}>
-            JARVIS
-          </span>
-          <span style={{ color: 'var(--text-muted)', fontSize: 10 }}>
-            {STATE_LABELS[jarvisState]}
-          </span>
+        {/* Header - draggable */}
+        <div
+          onMouseDown={handleDragStart}
+          style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid var(--border-color)',
+            display: 'flex', alignItems: 'center', gap: 10,
+            flexShrink: 0,
+            cursor: 'grab',
+            userSelect: 'none',
+          }}
+        >
+          <JarvisOrb state={jarvisState} size={18} />
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{ color: 'var(--accent-primary)', fontSize: 11, fontWeight: 700, letterSpacing: 1 }}>
+              JARVIS
+            </span>
+            <span style={{ color: isFollowUp ? '#00ffff' : 'var(--text-muted)', fontSize: 9.5 }}>
+              {isFollowUp ? 'Жду продолжения…' : STATE_LABELS[jarvisState]}
+            </span>
+          </div>
           <div style={{ flex: 1 }} />
           <button
             onClick={() => {

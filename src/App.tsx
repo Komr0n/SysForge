@@ -13,19 +13,21 @@ import DraggableWidget from './components/widgets/DraggableWidget';
 import { JarvisChat } from './components/JarvisUI/JarvisChat';
 import { JarvisLog, LogEntry } from './components/JarvisUI/JarvisLog';
 import { JarvisSettings } from './components/JarvisUI/JarvisSettings';
+import { JarvisOrb3D } from './components/JarvisUI/JarvisOrb3D';
 import { useWindowStore } from './store/windowStore';
 import { useSettingsStore } from './store/settingsStore';
 import { getVoiceService, JarvisState } from './lib/jarvis/voice-service';
 
 import GlobeWidget from './components/widgets/GlobeWidget';
 import { registerUICallbacks } from './lib/jarvis/tool-executor';
+import { getThresholdWatcher } from './lib/jarvis/threshold-watcher';
 const ClockWidget = lazy(() => import('./components/widgets/ClockWidget'));
 
 const APP_ICONS: Record<string, string> = {
   ping: '📡', traceroute: '🛤️', 'port-scanner': '🔌', bandwidth: '📊',
   dns: '🌐', ssh: '💻', wol: '⚡', hash: '#️⃣', ssl: '🔒',
   password: '🔑', 'ip-intel': '🕵️', subnet: '🖧', jwt: '🎫', cve: '🐛',
-  processes: '⚙️', 'system-overview': '💾', logs: '📋', 'file-hash': '🔍',
+  processes: '⚙️', 'system-overview': '💾', logs: '📋', 'file-hash': '🔍', 'app-scheduler': '⏱️', 'net-processes': '🌐',
   'api-tester': '🧪', formatter: '{ }', encoder: '🔢', regex: '🔤',
   snippets: '📝', diff: '↔️',
 };
@@ -34,6 +36,7 @@ export default function App() {
   const [bootComplete, setBootComplete] = useState(false);
   const [jarvisChatOpen, setJarvisChatOpen] = useState(false);
   const [jarvisSettingsOpen, setJarvisSettingsOpen] = useState(false);
+  const [jarvisLogOpen, setJarvisLogOpen] = useState(false);
   const [jarvisState, setJarvisState] = useState<JarvisState>('idle');
   const [hudLogs, setHudLogs] = useState<LogEntry[]>([]);
 
@@ -43,6 +46,13 @@ export default function App() {
   const widgets = useSettingsStore((s) => s.widgets);
   const setTheme = useSettingsStore((s) => s.setTheme);
   const setBackground = useSettingsStore((s) => s.setBackground);
+  const jarvisConfig = useSettingsStore((s) => s.jarvis);
+
+  useEffect(() => {
+    if (jarvisConfig?.thresholds) {
+      getThresholdWatcher(jarvisConfig.thresholds);
+    }
+  }, [jarvisConfig?.thresholds]);
 
   useEffect(() => {
     registerUICallbacks({
@@ -75,7 +85,7 @@ export default function App() {
   }, [jarvisState]);
 
   const handleNewLog = useCallback((entry: LogEntry) => {
-    setHudLogs((prev) => [...prev.slice(-19), entry]);
+    setHudLogs((prev) => [...prev.slice(-49), entry]);
   }, []);
 
   if (!bootComplete) {
@@ -92,6 +102,22 @@ export default function App() {
         <BackgroundEffects />
       </ErrorBoundary>
 
+      {/* Ambient 3D Jarvis Orb (centered background layer) */}
+      <ErrorBoundary fallback={null}>
+        <div style={{
+          position: 'fixed',
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          zIndex: 1,
+          pointerEvents: 'none',
+          opacity: jarvisState === 'speaking' ? 0.95 : 0.65,
+          transition: 'opacity 0.4s ease',
+        }}>
+          <JarvisOrb3D state={jarvisState} size={300} isFollowUp={false} />
+        </div>
+      </ErrorBoundary>
+
       {/* Top eDEX-UI Status Bar with Jarvis HUD */}
       <ErrorBoundary fallback={null}>
         <StatusBar
@@ -100,6 +126,8 @@ export default function App() {
           onToggleChat={() => setJarvisChatOpen((v) => !v)}
           onToggleMic={handleToggleJarvisMic}
           onOpenJarvisSettings={() => setJarvisSettingsOpen(true)}
+          onToggleLog={() => setJarvisLogOpen((v) => !v)}
+          isLogOpen={jarvisLogOpen}
         />
       </ErrorBoundary>
 
@@ -163,9 +191,13 @@ export default function App() {
         <Taskbar />
       </ErrorBoundary>
 
-      {/* Jarvis HUD floating log overlay (bottom area) */}
+      {/* Jarvis Log Modal (opened via button in StatusBar) */}
       <ErrorBoundary fallback={null}>
-        <JarvisLog entries={hudLogs} visible={!jarvisChatOpen} />
+        <JarvisLog
+          entries={hudLogs}
+          visible={jarvisLogOpen}
+          onClose={() => setJarvisLogOpen(false)}
+        />
       </ErrorBoundary>
 
       {/* Jarvis slide-up / floating chat interface */}

@@ -8,6 +8,7 @@ import Traceroute from './network/Traceroute';
 import BandwidthMonitor from './network/BandwidthMonitor';
 import SSHClient from './network/SSHClient';
 import WakeOnLan from './network/WakeOnLan';
+import NetworkByProcess from './network/NetworkByProcess';
 
 // Security
 import HashTool from './security/HashTool';
@@ -23,6 +24,7 @@ import SystemOverview from './system/SystemOverview';
 import ProcessManager from './system/ProcessManager';
 import LogAnalyzer from './system/LogAnalyzer';
 import FileHashCheck from './system/FileHashCheck';
+import AppScheduler from './system/AppScheduler';
 
 // Developer
 import EncoderDecoder from './developer/EncoderDecoder';
@@ -47,6 +49,7 @@ export const appRegistry: Record<string, ComponentType> = {
   'dns': DnsLookup,
   'ssh': SSHClient,
   'wol': WakeOnLan,
+  'net-processes': NetworkByProcess,
 
   // Security
   'hash': HashTool,
@@ -62,6 +65,7 @@ export const appRegistry: Record<string, ComponentType> = {
   'system-overview': SystemOverview,
   'logs': LogAnalyzer,
   'file-hash': FileHashCheck,
+  'app-scheduler': AppScheduler,
 
   // Developer
   'api-tester': APITester,

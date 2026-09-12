@@ -208,6 +208,54 @@ async function dispatchToolCall(toolName: string, args: Record<string, unknown>)
     }
 
     // ── Full (деструктивные) ─────────────────────────────────────────────────
+    case 'close_os_app': {
+      const appName = (args.appName as string) || (args.name as string) || '';
+      const allNames = Array.isArray(args.allProcessNames) ? (args.allProcessNames as string[]) : [appName];
+      if (!appName && allNames.length === 0) return { success: false, message: 'Имя приложения не указано' };
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          let lastErr = '';
+          for (const name of allNames) {
+            try {
+              const res = await invoke<string>('close_os_app_by_name', { name });
+              return { success: true, message: res };
+            } catch (e) {
+              lastErr = (e as Error).message;
+            }
+          }
+          return { success: false, message: lastErr || `Не удалось закрыть "${appName}"` };
+        } catch (e) {
+          return { success: false, message: `Не удалось закрыть "${appName}": ${(e as Error).message}` };
+        }
+      }
+      return { success: false, message: 'Закрытие приложений ОС доступно только в настольной версии SysForge' };
+    }
+
+    case 'schedule_close_app': {
+      const appName = (args.appName as string) || (args.name as string) || '';
+      const delayMinutes = Number(args.delayMinutes) || 1;
+      const delaySeconds = Math.max(1, Math.round(delayMinutes * 60));
+      if (!appName) return { success: false, message: 'Имя приложения не указано' };
+      if (isTauri) {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const res = await invoke<{ id: string; app_name: string; fires_at_ms: number }>('schedule_close_app', {
+            appName,
+            delaySeconds,
+          });
+          return {
+            success: true,
+            data: res,
+            message: `Запланировано закрытие ${appName} через ${delayMinutes} мин.`,
+          };
+        } catch (e) {
+          return { success: false, message: `Ошибка планирования: ${(e as Error).message}` };
+        }
+      }
+      return { success: false, message: 'Планировщик доступен только в настольной версии SysForge' };
+    }
+
     case 'kill_process': {
       const pid = args.pid as number;
       const target = args.target as string | number;
