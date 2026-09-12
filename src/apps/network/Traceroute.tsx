@@ -19,7 +19,7 @@ export default function Traceroute() {
         const res = await invoke<string>('traceroute_host', {
           host: host.trim(),
           maxHops: maxHops,
-          noDns: noDns,
+          noFragment: noDns,
         });
         setOutput(res || 'Traceroute completed with no output.');
       } catch (err) {

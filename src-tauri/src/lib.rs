@@ -674,6 +674,141 @@ async fn jarvis_lock_screen() -> Result<(), String> {
     }
 }
 
+#[derive(Serialize)]
+pub struct PortScanResult {
+    pub port: u16,
+    pub open: bool,
+}
+
+#[tauri::command]
+async fn scan_ports(
+    host: String,
+    ports: Vec<u16>,
+    timeout_ms: Option<u64>,
+) -> Result<Vec<PortScanResult>, String> {
+    validate_host(&host)?;
+    let timeout_duration = Duration::from_millis(timeout_ms.unwrap_or(1200).clamp(100, 5000));
+
+    let mut set = tokio::task::JoinSet::new();
+    for port in ports {
+        let host_clone = host.clone();
+        set.spawn(async move {
+            let addr = format!("{}:{}", host_clone, port);
+            let is_open = match timeout(timeout_duration, tokio::net::TcpStream::connect(&addr)).await {
+                Ok(Ok(_)) => true,
+                _ => false,
+            };
+            PortScanResult { port, open: is_open }
+        });
+    }
+
+    let mut results = Vec::new();
+    while let Some(res) = set.join_next().await {
+        if let Ok(item) = res {
+            results.push(item);
+        }
+    }
+    results.sort_by_key(|r| r.port);
+    Ok(results)
+}
+
+#[tauri::command]
+async fn send_wol_packet(
+    mac: String,
+    broadcast: Option<String>,
+    port: Option<u16>,
+) -> Result<String, String> {
+    let cleaned_mac: String = mac.chars().filter(|c| c.is_ascii_hexdigit()).collect();
+    if cleaned_mac.len() != 12 {
+        return Err("Invalid MAC address: must be 12 hex digits (e.g. 00:11:22:33:44:55)".to_string());
+    }
+
+    let mut mac_bytes = [0u8; 6];
+    for i in 0..6 {
+        mac_bytes[i] = u8::from_str_radix(&cleaned_mac[i * 2..i * 2 + 2], 16)
+            .map_err(|e| format!("Invalid hex in MAC: {}", e))?;
+    }
+
+    let mut packet = [0u8; 102];
+    packet[..6].fill(0xFF);
+    for i in 0..16 {
+        let offset = 6 + i * 6;
+        packet[offset..offset + 6].copy_from_slice(&mac_bytes);
+    }
+
+    let target_ip = broadcast.unwrap_or_else(|| "255.255.255.255".to_string());
+    let target_port = port.unwrap_or(9);
+    let target_addr = format!("{}:{}", target_ip, target_port);
+
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0")
+        .map_err(|e| format!("Failed to bind UDP socket: {}", e))?;
+    socket
+        .set_broadcast(true)
+        .map_err(|e| format!("Failed to set UDP broadcast: {}", e))?;
+
+    socket
+        .send_to(&packet, &target_addr)
+        .map_err(|e| format!("Failed to send WOL magic packet: {}", e))?;
+
+    Ok(format!("Magic packet transmitted to {} ({})", target_addr, mac))
+}
+
+#[tauri::command]
+async fn lookup_ip_intel(ip: String, api_key: String) -> Result<serde_json::Value, String> {
+    validate_host(&ip)?;
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .get("https://api.abuseipdb.com/api/v2/check")
+        .query(&[
+            ("ipAddress", ip.as_str()),
+            ("maxAgeInDays", "90"),
+            ("verbose", "true"),
+        ])
+        .header("Key", api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| format!("AbuseIPDB request failed: {}", e))?;
+
+    let status = resp.status();
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse JSON response: {}", e))?;
+    if !status.is_success() {
+        return Err(format!("AbuseIPDB HTTP {}: {}", status, json));
+    }
+    Ok(json)
+}
+
+#[tauri::command]
+async fn inspect_ssl(host: String) -> Result<String, String> {
+    validate_host(&host)?;
+
+    #[cfg(target_os = "windows")]
+    {
+        let ps_cmd = format!(
+            "$t = New-Object Net.Sockets.TcpClient('{}', 443); $s = New-Object Net.Security.SslStream($t.GetStream(), $false, ({{$true}} -as [Net.Security.RemoteCertificateValidationCallback])); $s.AuthenticateAsClient('{}'); $c = $s.RemoteCertificate; 'SUBJECT=' + $c.Subject; 'ISSUER=' + $c.Issuer; 'NOTAFTER=' + $c.GetExpirationDateString(); 'SERIAL=' + $c.GetSerialNumberString(); 'SIGALG=' + $c.GetKeyAlgorithm(); $t.Close()",
+            host, host
+        );
+        run_cmd_timeout("powershell", &["-NoProfile", "-NonInteractive", "-Command", &ps_cmd], 15).await
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let target = format!("{}:443", host);
+        let sh_cmd = format!(
+            "openssl s_client -connect {} -servername {} </dev/null 2>/dev/null | openssl x509 -noout -subject -issuer -dates -serial",
+            target, host
+        );
+        run_cmd_timeout("sh", &["-c", &sh_cmd], 15).await
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Argument parsers for terminal commands
 // ─────────────────────────────────────────────────────────────────────────────
@@ -824,6 +959,10 @@ pub fn run() {
             jarvis_llm_request,
             jarvis_find_app,
             jarvis_launch_registered_app,
+            scan_ports,
+            send_wol_packet,
+            lookup_ip_intel,
+            inspect_ssl,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

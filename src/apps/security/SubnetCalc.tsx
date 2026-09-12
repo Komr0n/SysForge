@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Input, Button, Badge, Card } from '../../components/ui';
+import { Input, Badge, Card } from '../../components/ui';
 
 function ipToInt(ip: string): number | null {
   const parts = ip.split('.').map(Number);

@@ -371,8 +371,6 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
     }
   };
 
-  if (!isOpen) return null;
-
   const msgColors = {
     user: 'var(--accent-primary)',
     jarvis: 'var(--text-primary)',
@@ -394,7 +392,7 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
         background: 'rgba(8,10,16,0.94)',
         border: '1px solid var(--border-color)',
         borderRadius: 8,
-        display: 'flex',
+        display: isOpen ? 'flex' : 'none',
         flexDirection: 'column',
         backdropFilter: 'blur(12px)',
         boxShadow: '0 8px 40px rgba(0,0,0,0.65)',

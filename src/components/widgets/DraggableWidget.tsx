@@ -25,7 +25,6 @@ export default function DraggableWidget({
   initialY = 16,
   anchor,
   width = 280,
-  height = 200,
   title,
   children,
 }: DraggableWidgetProps) {

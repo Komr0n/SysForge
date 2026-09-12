@@ -294,21 +294,12 @@ export const useSettingsStore = create<SettingsState>()(
     {
       name: 'sysforge-settings',
       storage: createJSONStorage(() => tauriStorageAdapter),
-      partialize: (state) => {
-        const { apiKeys, ...rest } = state;
-        return {
-          ...rest,
-          jarvis: {
-            ...rest.jarvis,
-            cloud: { ...rest.jarvis.cloud, apiKey: '' },
-            cloudProviders: (rest.jarvis.cloudProviders || []).map((p) => ({ ...p, apiKey: '' })),
-          },
-        };
-      },
+      partialize: (state) => state,
       merge: (persisted, current) => {
         const saved = persisted as Partial<SettingsState> & {
           performance?: Partial<SettingsState['performance']>;
           widgets?: Partial<SettingsState['widgets']>;
+          apiKeys?: Partial<SettingsState['apiKeys']>;
           jarvis?: Partial<JarvisConfig>;
         };
         const merged = { ...current, ...saved };
@@ -325,6 +316,10 @@ export const useSettingsStore = create<SettingsState>()(
           };
         }
 
+        if (saved.apiKeys) {
+          merged.apiKeys = { ...current.apiKeys, ...saved.apiKeys };
+        }
+
         if (saved.widgetPositions) {
           merged.widgetPositions = { ...current.widgetPositions, ...saved.widgetPositions };
         }
@@ -338,7 +333,7 @@ export const useSettingsStore = create<SettingsState>()(
                 return {
                   ...def,
                   ...foundSaved,
-                  apiKey: foundCurrent?.apiKey || foundSaved?.apiKey || '',
+                  apiKey: foundSaved?.apiKey || foundCurrent?.apiKey || '',
                 };
               })
             : currentProviders;
@@ -350,7 +345,7 @@ export const useSettingsStore = create<SettingsState>()(
             cloud: {
               ...DEFAULT_JARVIS_CONFIG.cloud,
               ...saved.jarvis.cloud,
-              apiKey: current.jarvis.cloud.apiKey || saved.jarvis.cloud?.apiKey || '',
+              apiKey: saved.jarvis.cloud?.apiKey || current.jarvis.cloud.apiKey || '',
             },
             voice: { ...DEFAULT_JARVIS_CONFIG.voice, ...saved.jarvis.voice },
             cloudProviders: savedProviders,

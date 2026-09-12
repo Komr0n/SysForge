@@ -61,7 +61,7 @@ export default function DnsLookup() {
   const [loading, setLoading] = useState(false);
 
   /** Parse nslookup output into records (real backend mode). */
-  function parseNslookup(output: string, type: string, queriedName: string): DnsRecord[] {
+  function parseNslookup(output: string, _type: string, queriedName: string): DnsRecord[] {
     const records: DnsRecord[] = [];
     const lines = output.split(/\r?\n/);    let currentName = queriedName;
     for (let i = 0; i < lines.length; i++) {

@@ -350,11 +350,20 @@ export default function GlobeWidget({ style }: GlobeWidgetProps) {
       window.removeEventListener('mouseup', onMouseUpWindow);
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('dblclick', onDblClick);
-      renderer.dispose();
+      // Thorough recursive Three.js resource disposal
+      scene.traverse((obj) => {
+        if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+          obj.geometry?.dispose();
+          if (Array.isArray(obj.material)) {
+            obj.material.forEach((m) => m.dispose());
+          } else if (obj.material) {
+            obj.material.dispose();
+          }
+        }
+      });
       earthTex.dispose();
-      earthMat.dispose();
-      wireGeo.dispose(); wireMat.dispose();
-      atmosMat.dispose(); satGeo.dispose();
+      renderer.dispose();
+
       if (container.contains(canvas)) container.removeChild(canvas);
     };
   }, [fpsCap, reduceMotion]);

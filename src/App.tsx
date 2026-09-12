@@ -1,4 +1,4 @@
-import { useState, lazy, Suspense, useCallback } from 'react';
+import { useState, useEffect, lazy, Suspense, useCallback } from 'react';
 import BootScreen from './components/BootScreen/BootScreen';
 import BackgroundEffects from './components/effects/BackgroundEffects';
 import ErrorBoundary from './components/ErrorBoundary/ErrorBoundary';
@@ -18,7 +18,17 @@ import { useSettingsStore } from './store/settingsStore';
 import { getVoiceService, JarvisState } from './lib/jarvis/voice-service';
 
 import GlobeWidget from './components/widgets/GlobeWidget';
+import { registerUICallbacks } from './lib/jarvis/tool-executor';
 const ClockWidget = lazy(() => import('./components/widgets/ClockWidget'));
+
+const APP_ICONS: Record<string, string> = {
+  ping: '📡', traceroute: '🛤️', 'port-scanner': '🔌', bandwidth: '📊',
+  dns: '🌐', ssh: '💻', wol: '⚡', hash: '#️⃣', ssl: '🔒',
+  password: '🔑', 'ip-intel': '🕵️', subnet: '🖧', jwt: '🎫', cve: '🐛',
+  processes: '⚙️', 'system-overview': '💾', logs: '📋', 'file-hash': '🔍',
+  'api-tester': '🧪', formatter: '{ }', encoder: '🔢', regex: '🔤',
+  snippets: '📝', diff: '↔️',
+};
 
 export default function App() {
   const [bootComplete, setBootComplete] = useState(false);
@@ -28,7 +38,30 @@ export default function App() {
   const [hudLogs, setHudLogs] = useState<LogEntry[]>([]);
 
   const windows = useWindowStore((s) => s.windows);
+  const openWindow = useWindowStore((s) => s.openWindow);
+  const closeWindow = useWindowStore((s) => s.closeWindow);
   const widgets = useSettingsStore((s) => s.widgets);
+  const setTheme = useSettingsStore((s) => s.setTheme);
+  const setBackground = useSettingsStore((s) => s.setBackground);
+
+  useEffect(() => {
+    registerUICallbacks({
+      openApp: (appId: string) => {
+        if (APP_ICONS[appId]) {
+          openWindow(appId, appId.toUpperCase(), APP_ICONS[appId], appId);
+        }
+      },
+      closeApp: (appId: string) => {
+        closeWindow(appId);
+      },
+      setTheme: (theme: string) => {
+        setTheme(theme as any);
+      },
+      setBackground: (bg: string) => {
+        setBackground(bg as any);
+      },
+    });
+  }, [openWindow, closeWindow, setTheme, setBackground]);
 
   const handleToggleJarvisMic = useCallback(() => {
     const vs = getVoiceService();

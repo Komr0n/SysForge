@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { X, Palette, Monitor, Cpu, Volume2, Key, LayoutGrid } from 'lucide-react';
-import { useSettingsStore, BackgroundType, ThemeMode, MatrixColor } from '../../store/settingsStore';
+import { useSettingsStore, BackgroundType, MatrixColor } from '../../store/settingsStore';
 import { BG_LABELS } from '../effects/BackgroundEffects';
 import { MATRIX_COLOR_OPTIONS } from '../effects/matrixColors';
 import { PRIMARY_THEME_OPTIONS, EXPERIMENTAL_THEME_OPTIONS } from './ThemeManager';

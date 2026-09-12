@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
 import { useTauri } from '../../hooks/useTauri';
 

@@ -1,4 +1,5 @@
 import { useState, DragEvent } from 'react';
+import { md5Bytes } from '../security/HashTool';
 
 export default function FileHashCheck() {
   const [fileName, setFileName] = useState<string>('');
@@ -27,8 +28,9 @@ export default function FileHashCheck() {
     const hex1 = hashArray1.map((b) => b.toString(16).padStart(2, '0')).join('');
     setSha1(hex1);
 
-    // Simple pseudo-MD5 hex representation for demo
-    setMd5('d41d8cd98f00b204e9800998ecf8427e');
+    // Compute real MD5 hash from buffer
+    const realMd5 = md5Bytes(new Uint8Array(buffer));
+    setMd5(realMd5);
   };
 
   const handleDrop = (e: DragEvent<HTMLDivElement>) => {

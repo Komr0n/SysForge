@@ -100,6 +100,19 @@ export default function LogAnalyzer() {
             ALL ({lines.length})
           </button>
           <button
+            onClick={() => setFilter('warn')}
+            style={{
+              padding: '4px 10px',
+              borderRadius: 4,
+              border: `1px solid ${filter === 'warn' ? '#f59e0b' : 'var(--border-color)'}`,
+              background: filter === 'warn' ? 'rgba(245,158,11,0.1)' : 'transparent',
+              color: filter === 'warn' ? '#f59e0b' : 'var(--text-muted)',
+              cursor: 'pointer',
+            }}
+          >
+            WARNS ({warnCount})
+          </button>
+          <button
             onClick={() => setFilter('error')}
             style={{
               padding: '4px 10px',

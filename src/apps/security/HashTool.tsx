@@ -12,17 +12,12 @@ async function shaHex(algo: 'SHA-1' | 'SHA-256' | 'SHA-512', text: string): Prom
   return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-function md5(text: string): string {
-  // Lightweight pure-JS MD5 (public-domain style implementation)
-  const utf8 = unescape(encodeURIComponent(text));
-  const bytes: number[] = [];
-  for (let i = 0; i < utf8.length; i++) bytes.push(utf8.charCodeAt(i));
-
+export function md5Bytes(bytes: Uint8Array | number[]): string {
   const len = bytes.length;
   const bitLen = len * 8;
 
   // Pad
-  const padded = bytes.slice();
+  const padded = Array.from(bytes);
   padded.push(0x80);
   while (padded.length % 64 !== 56) padded.push(0);
   for (let i = 0; i < 8; i++) padded.push(Math.floor(bitLen / Math.pow(2, 8 * i)) & 0xff);
@@ -76,6 +71,13 @@ function md5(text: string): string {
     return s;
   };
   return toHex(a0) + toHex(b0) + toHex(c0) + toHex(d0);
+}
+
+export function md5(text: string): string {
+  const utf8 = unescape(encodeURIComponent(text));
+  const bytes: number[] = [];
+  for (let i = 0; i < utf8.length; i++) bytes.push(utf8.charCodeAt(i));
+  return md5Bytes(bytes);
 }
 
 function crc32(text: string): number {

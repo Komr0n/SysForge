@@ -1,4 +1,4 @@
-import React, { Suspense, lazy } from 'react';
+import { Suspense, lazy } from 'react';
 import { useSettingsStore, BackgroundType } from '../../store/settingsStore';
 
 // Code-split all heavy background effect components

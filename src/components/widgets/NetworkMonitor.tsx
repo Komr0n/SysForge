@@ -84,7 +84,7 @@ export default function NetworkMonitor() {
 
       if (isAvailable) {
         try {
-          const stats = await invoke<any>('get_network_stats');
+          const stats = await invoke<{ interfaces: InterfaceStats[] }>('get_network_stats');
           if (!stats?.interfaces) return;
           let rx = 0, tx = 0;
           for (const itf of stats.interfaces) {

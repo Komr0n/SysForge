@@ -18,7 +18,7 @@ export default defineConfig(async () => ({
         manualChunks: {
           three: ["three"],
           icons: ["lucide-react"],
-          vendor: ["react", "react-dom", "zustand"],
+          vendor: ["react", "react-dom", "zustand", "react-rnd"],
         },
       },
     },

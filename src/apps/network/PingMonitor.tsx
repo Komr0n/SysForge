@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { Button, Input, Select, Badge, Card } from '../../components/ui';
+import { Button, Input, Select, Badge } from '../../components/ui';
 import { useInterval } from '../../hooks/useInterval';
 import { useTauri } from '../../hooks/useTauri';
 
@@ -33,11 +33,13 @@ function parseLatency(output: string): number | null {
 
 function isPingSuccess(output: string): boolean {
   const o = output.toLowerCase();
-  if (o.includes('ttl=')) return true;              // Windows/Linux replies
-  if (o.includes('bytes from') && !o.includes('unreachable')) return true;
-  if (o.includes('average') && !o.includes('(0% loss)') === false && o.includes('lost = 0')) return true;
-  if (o.includes('0% packet loss') || o.includes('0 packets transmitted')) return false;
-  return /received = [1-9]/.test(o);                // Linux summary
+  if (o.includes('100% packet loss') || o.includes('100% loss') || o.includes('0 packets transmitted') || o.includes('destination host unreachable') || o.includes('request timed out')) {
+    return false;
+  }
+  if (o.includes('ttl=') || o.includes('bytes from') || o.includes('0% loss') || o.includes('0% packet loss') || o.includes('lost = 0')) {
+    return true;
+  }
+  return /received = [1-9]/.test(o) || /time[=<]\s*[\d.]+\s*ms/i.test(o);
 }
 
 function simulatePing(host: string): Promise<number> {
