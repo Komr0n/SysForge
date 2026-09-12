@@ -84,7 +84,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'calc.exe', displayName: 'Калькулятор' },
+      args: { appId: 'calculator', displayName: 'Калькулятор' },
       displayText: 'Открываю калькулятор, сэр.',
     }),
   },
@@ -95,7 +95,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'notepad.exe', displayName: 'Блокнот' },
+      args: { appId: 'notepad', displayName: 'Блокнот' },
       displayText: 'Открываю блокнот.',
     }),
   },
@@ -106,7 +106,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'explorer.exe', displayName: 'Проводник' },
+      args: { appId: 'explorer', displayName: 'Проводник' },
       displayText: 'Открываю проводник Windows.',
     }),
   },
@@ -117,7 +117,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'cmd.exe', displayName: 'Командная строка' },
+      args: { appId: 'cmd', displayName: 'Командная строка' },
       displayText: 'Открываю командную строку.',
     }),
   },
@@ -128,7 +128,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'powershell.exe', displayName: 'PowerShell' },
+      args: { appId: 'powershell', displayName: 'PowerShell' },
       displayText: 'Открываю PowerShell.',
     }),
   },
@@ -139,7 +139,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'taskmgr.exe', displayName: 'Диспетчер задач' },
+      args: { appId: 'task_manager', displayName: 'Диспетчер задач' },
       displayText: 'Открываю диспетчер задач Windows.',
     }),
   },
@@ -161,18 +161,8 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     ],
     handler: () => ({
       toolName: 'open_system_app',
-      args: { program: 'mspaint.exe', displayName: 'Paint' },
+      args: { appId: 'paint', displayName: 'Paint' },
       displayText: 'Открываю Paint.',
-    }),
-  },
-  {
-    patterns: [
-      prog('(настройки|параметры системы|system settings|settings)'),
-    ],
-    handler: () => ({
-      toolName: 'open_system_app',
-      args: { program: 'ms-settings:', displayName: 'Настройки Windows' },
-      displayText: 'Открываю настройки Windows.',
     }),
   },
 

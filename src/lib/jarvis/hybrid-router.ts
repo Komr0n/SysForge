@@ -13,7 +13,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 export interface CommandResult {
   response: string;
   toolResults: ToolResult[];
-  matchedVia: 'direct' | 'embedding' | 'llm' | 'skill';
+  matchedVia: 'direct' | 'embedding' | 'llm' | 'skill' | 'keyword';
   skillId?: string;
   pendingConfirmation?: {
     toolName: string;
@@ -136,12 +136,16 @@ export async function routeCommand(
   }
 
   // ─── 2. ONNX embedding матч ─────────────────────────────────────────────
+  let matchType: 'embedding' | 'keyword' = 'embedding';
   let embeddingMatch = await onnxMatch(text, threshold);
 
   // ─── 3. Keyword matching (fallback без ONNX) ─────────────────────────────
   if (!embeddingMatch) {
     const kwMatch = keywordMatch(text);
-    if (kwMatch) embeddingMatch = kwMatch;
+    if (kwMatch) {
+      embeddingMatch = kwMatch;
+      matchType = 'keyword';
+    }
   }
 
   // ─── 4. Выполняем найденный навык ────────────────────────────────────────
@@ -154,7 +158,7 @@ export async function routeCommand(
       const result = await executeTool({
         toolName: 'load_skill',
         args: { skillId: skill.id, slots: embeddingMatch.extracted_slots },
-        matchedVia: 'embedding',
+        matchedVia: matchType,
         skillName: skill.displayName,
       });
 
@@ -164,7 +168,7 @@ export async function routeCommand(
       return {
         response,
         toolResults: [result],
-        matchedVia: 'embedding',
+        matchedVia: matchType,
         skillId: skill.id,
       };
     }

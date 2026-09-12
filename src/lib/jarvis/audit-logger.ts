@@ -1,14 +1,19 @@
 // src/lib/jarvis/audit-logger.ts
 // Аудит-логирование всех команд с побочным эффектом
 
-const isTauri = typeof window !== 'undefined' && '__TAURI__' in window;
+const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
 export interface AuditEntry {
   timestamp: string;
-  toolName: string;
-  args: unknown;
-  status: 'started' | 'completed' | 'error';
-  matchedVia: 'embedding' | 'llm' | 'skill' | 'direct';
+  toolName?: string;
+  action?: string;
+  args?: unknown;
+  params?: unknown;
+  status: 'started' | 'completed' | 'error' | 'attempted' | 'success' | 'denied';
+  matchedVia?: 'embedding' | 'llm' | 'skill' | 'direct' | 'keyword';
+  triggeredBy?: 'embedding' | 'llm' | 'skill' | 'direct' | 'keyword';
+  sandboxLevel?: string;
+  reason?: string;
   result?: string;
   error?: string;
   skillName?: string;
@@ -71,6 +76,25 @@ export const auditLog = {
     } else {
       appendToLocalStorage(entry);
     }
+  },
+
+  log(entry: Partial<AuditEntry>): void {
+    const fullEntry: AuditEntry = {
+      timestamp: entry.timestamp || new Date().toISOString(),
+      toolName: entry.toolName || entry.action || 'unknown',
+      action: entry.action || entry.toolName || 'unknown',
+      args: entry.args || entry.params,
+      params: entry.params || entry.args,
+      status: entry.status || 'attempted',
+      matchedVia: entry.matchedVia || entry.triggeredBy || 'direct',
+      triggeredBy: entry.triggeredBy || entry.matchedVia || 'direct',
+      sandboxLevel: entry.sandboxLevel || 'standard',
+      reason: entry.reason,
+      result: entry.result,
+      error: entry.error,
+      skillName: entry.skillName,
+    };
+    this.logCommand(fullEntry);
   },
 
   getMemoryLog(): AuditEntry[] {

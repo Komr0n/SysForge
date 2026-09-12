@@ -8,14 +8,12 @@ export default defineConfig(async () => ({
   clearScreen: false,
 
   optimizeDeps: {
-    // Keep Tauri packages out of Vite's pre-bundler — they're provided by the runtime.
-    exclude: ["@tauri-apps/plugin-store", "@tauri-apps/api"],
+    // Keep Tauri packages out of pre-bundle exclusion so rollup bundles correctly
   },
 
   build: {
     chunkSizeWarningLimit: 800,
     rollupOptions: {
-      external: ["@tauri-apps/plugin-store"],
       output: {
         manualChunks: {
           three: ["three"],

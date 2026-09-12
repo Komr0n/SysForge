@@ -8,7 +8,7 @@ export interface LogEntry {
   timestamp: Date;
   type: 'user' | 'jarvis' | 'system' | 'error';
   text: string;
-  matchedVia?: 'embedding' | 'llm' | 'skill' | 'direct';
+  matchedVia?: 'embedding' | 'llm' | 'skill' | 'direct' | 'keyword';
 }
 
 interface JarvisLogProps {
@@ -36,84 +36,95 @@ const VIA_BADGE: Record<string, string> = {
   llm:       '🧠',
   skill:     '🔧',
   direct:    '→',
+  keyword:   '🔤',
 };
 
-export function JarvisLog({ entries, maxEntries = 10, visible }: JarvisLogProps) {
-  const bottomRef = useRef<HTMLDivElement>(null);
-  const displayEntries = entries.slice(-maxEntries);
+export function JarvisLog({ entries, maxEntries = 3, visible }: JarvisLogProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const recent = entries.slice(-maxEntries);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
   }, [entries]);
 
-  if (!visible || displayEntries.length === 0) return null;
+  if (!visible || recent.length === 0) return null;
 
   return (
     <div
+      ref={containerRef}
       style={{
         position: 'fixed',
-        bottom: 230,
-        left: 220,
-        right: 260,
-        zIndex: 200,
+        top: 38,
+        left: 0,
+        right: 0,
+        zIndex: 4000,
+        background: 'rgba(8,10,16,0.92)',
+        borderBottom: '1px solid var(--border-color)',
+        padding: '3px 16px',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 2,
+        maxHeight: 70,
+        overflowY: 'hidden',
         pointerEvents: 'none',
-        padding: '0 12px',
+        backdropFilter: 'blur(4px)',
+        fontFamily: 'var(--font-mono)',
       }}
     >
-      <div style={{
-        background: 'rgba(0,0,0,0.55)',
-        backdropFilter: 'blur(8px)',
-        border: '1px solid rgba(255,255,255,0.06)',
-        borderRadius: 6,
-        padding: '6px 10px',
-        maxHeight: 180,
-        overflowY: 'auto',
-        scrollbarWidth: 'none',
-      }}>
-        {displayEntries.map((entry) => (
-          <div
-            key={entry.id}
+      {recent.map((entry) => (
+        <div
+          key={entry.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            fontSize: 10,
+            lineHeight: '16px',
+            color: TYPE_COLORS[entry.type],
+            opacity: 0.9,
+          }}
+        >
+          {/* Time */}
+          <span style={{ color: 'var(--text-muted)', fontSize: 9, flexShrink: 0 }}>
+            {entry.timestamp.toLocaleTimeString('en-US', { hour12: false })}
+          </span>
+
+          {/* Type prefix */}
+          <span style={{ flexShrink: 0, fontWeight: 700 }}>
+            {TYPE_PREFIX[entry.type]}
+          </span>
+
+          {/* Matched via badge */}
+          {entry.matchedVia && (
+            <span
+              style={{
+                fontSize: 8,
+                padding: '0 3px',
+                border: '1px solid currentColor',
+                borderRadius: 2,
+                flexShrink: 0,
+                opacity: 0.7,
+              }}
+            >
+              {VIA_BADGE[entry.matchedVia] || entry.matchedVia}
+            </span>
+          )}
+
+          {/* Text */}
+          <span
             style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: 6,
-              marginBottom: 3,
-              fontSize: 10.5,
-              fontFamily: 'var(--font-mono)',
-              lineHeight: 1.4,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              maxWidth: '80vw',
             }}
           >
-            {/* Prefix */}
-            <span style={{
-              color: TYPE_COLORS[entry.type],
-              flexShrink: 0,
-              fontSize: 10,
-              marginTop: 1,
-            }}>
-              {TYPE_PREFIX[entry.type]}
-            </span>
-
-            {/* Text */}
-            <span style={{ color: TYPE_COLORS[entry.type], flex: 1, wordBreak: 'break-word' }}>
-              {entry.text}
-            </span>
-
-            {/* Via badge */}
-            {entry.matchedVia && (
-              <span style={{ color: 'var(--text-muted)', flexShrink: 0, fontSize: 10 }}
-                title={`matched via: ${entry.matchedVia}`}>
-                {VIA_BADGE[entry.matchedVia] ?? ''}
-              </span>
-            )}
-
-            {/* Timestamp */}
-            <span style={{ color: 'var(--text-muted)', flexShrink: 0, fontSize: 9, marginTop: 1 }}>
-              {entry.timestamp.toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-            </span>
-          </div>
-        ))}
-        <div ref={bottomRef} />
-      </div>
+            {entry.text}
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

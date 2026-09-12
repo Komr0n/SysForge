@@ -1,6 +1,6 @@
 // src/components/JarvisUI/JarvisChat.tsx
 // Главный компонент чата Джарвиса с голосовым вводом, визуальным индикатором громкости,
-// историей сессии и прямыми командами
+// историей сессии, прямыми командами и созданием навыков
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useSettingsStore } from '../../store/settingsStore';
@@ -16,7 +16,7 @@ import { SkillCreator } from './SkillCreator';
 import { LogEntry } from './JarvisLog';
 import { registerUICallbacks } from '../../lib/jarvis/tool-executor';
 import { useWindowStore } from '../../store/windowStore';
-import { Skill } from '../../lib/jarvis/sandbox';
+import { Skill, SandboxLevel } from '../../lib/jarvis/sandbox';
 
 // App icons mapping
 const APP_ICONS: Record<string, string> = {
@@ -41,7 +41,7 @@ interface ChatMessage {
   role: 'user' | 'jarvis' | 'system';
   text: string;
   time: Date;
-  matchedVia?: 'direct' | 'embedding' | 'llm' | 'skill';
+  matchedVia?: 'direct' | 'embedding' | 'llm' | 'skill' | 'keyword';
   providerUsed?: string;
   canSaveAsSkill?: boolean;
 }
@@ -60,71 +60,79 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
     setTheme: s.setTheme,
     setBackground: s.setBackground,
   }));
+
   const { openWindow, closeWindow } = useWindowStore((s) => ({
     openWindow: s.openWindow,
     closeWindow: s.closeWindow,
   }));
 
-  const [messages, setMessages] = useState<ChatMessage[]>([{
-    id: 'init', role: 'jarvis', text: 'Всегда к вашим услугам, сэр. Скажите «Джарвис» или нажмите 🎤 для голосового ввода.', time: new Date(),
-  }]);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: 'init',
+      role: 'jarvis',
+      text: 'Система J.A.R.V.I.S. активна. Все системы функционируют в штатном режиме. Чем могу помочь, сэр?',
+      time: new Date(),
+    },
+  ]);
 
-  const [input, setInput] = useState('');
-  const [jarvisState, setJarvisStateLocal] = useState<JarvisState>('idle');
-  const [interimText, setInterimText] = useState('');
-  const [micVolume, setMicVolume] = useState(0);
+  const [inputText, setInputText] = useState('');
+  const [jarvisState, setJarvisState] = useState<JarvisState>('idle');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [skillCreatorOpen, setSkillCreatorOpen] = useState(false);
   const [newSkillDraft, setNewSkillDraft] = useState<Skill | null>(null);
   const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [providerFallback, setProviderFallback] = useState<{
-    currentProvider: 'local' | 'cloud'; errorMessage: string;
+    currentProvider: 'local' | 'cloud';
+    errorMessage?: string;
   } | null>(null);
+  const [micVolume, setMicVolume] = useState(0);
+  const [interimText, setInterimText] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false);
 
-  const addMessage = useCallback((
-    role: 'user' | 'jarvis' | 'system',
-    text: string,
-    extra?: Partial<ChatMessage>
-  ) => {
-    const entry: ChatMessage = {
-      id: Date.now().toString() + Math.random().toString().slice(2, 6),
-      role,
-      text,
-      time: new Date(),
-      ...extra,
-    };
-    setMessages((prev) => [...prev.slice(-49), entry]);
-    return entry;
-  }, []);
-
-  const setJarvisState = useCallback((state: JarvisState) => {
-    setJarvisStateLocal(state);
-    onStateChange?.(state);
-  }, [onStateChange]);
-
-  // Регистрируем UI callbacks для tool-executor
+  // Регистрация UI callbacks для выполнения действий
   useEffect(() => {
     registerUICallbacks({
-      openApp: (appId) => {
-        const title = appId.charAt(0).toUpperCase() + appId.slice(1);
-        const icon = APP_ICONS[appId] ?? '📦';
+      openApp: (appId: string) => {
         if (APP_IDS.includes(appId)) {
-          openWindow(appId, title, icon, appId);
+          openWindow(appId, appId.toUpperCase(), APP_ICONS[appId] || '💻', appId);
         }
       },
-      closeApp: (appId) => closeWindow(appId),
-      setTheme: (theme) => setTheme(theme as Parameters<typeof setTheme>[0]),
-      setBackground: (bg) => setBackground(bg as Parameters<typeof setBackground>[0]),
+      closeApp: (appId: string) => {
+        closeWindow(appId);
+      },
+      setTheme: (theme: string) => {
+        setTheme(theme as any);
+      },
+      setBackground: (bg: string) => {
+        setBackground(bg as any);
+      },
     });
   }, [openWindow, closeWindow, setTheme, setBackground]);
 
-  // Обновляем оркестратор при изменении настроек
+  // Уведомление родителя о смене состояния
   useEffect(() => {
-    getOrchestrator({
+    onStateChange?.(jarvisState);
+  }, [jarvisState, onStateChange]);
+
+  // Автоскролл сообщений
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages, interimText]);
+
+  // Фокус на инпут при открытии
+  useEffect(() => {
+    if (isOpen) {
+      setTimeout(() => inputRef.current?.focus(), 100);
+    }
+  }, [isOpen]);
+
+  // Синхронизация конфига AI Orchestrator
+  useEffect(() => {
+    const orchestrator = getOrchestrator();
+    orchestrator.updateConfig({
       provider: jarvis.provider,
       local: jarvis.local,
       cloud: jarvis.cloud,
@@ -141,10 +149,44 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
     jarvis.autoFallbackOnRateLimit,
   ]);
 
+  const addMessage = useCallback((role: ChatMessage['role'], text: string, extra?: Partial<ChatMessage>) => {
+    const msg: ChatMessage = {
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+      role,
+      text,
+      time: new Date(),
+      ...extra,
+    };
+    setMessages((prev) => [...prev, msg]);
+    return msg;
+  }, []);
+
+  const handleSaveAsSkill = useCallback((msgId: string) => {
+    const msg = messages.find((m) => m.id === msgId);
+    if (!msg) return;
+
+    const draft: Skill = {
+      id: 'custom-' + Date.now(),
+      displayName: 'Пользовательский навык',
+      description: msg.text.slice(0, 80),
+      category: 'automation',
+      createdBy: 'user',
+      sandbox: SandboxLevel.Minimal,
+      phrases: { ru: [], en: [] },
+      slots: {},
+      steps: [],
+      executionCount: 0,
+      createdAt: new Date().toISOString(),
+    };
+    setNewSkillDraft(draft);
+    setSkillCreatorOpen(true);
+  }, [messages]);
+
   const handleCommand = useCallback(async (text: string) => {
     if (!text.trim()) return;
     if (processingRef.current) {
-      console.warn('[JarvisChat] Command already processing');
+      console.warn('[JarvisChat] Command already processing, ignoring');
+      return;
     }
     processingRef.current = true;
 
@@ -174,6 +216,29 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
         setJarvisState('idle');
         processingRef.current = false;
         return;
+      }
+
+      // Проверка на предложение нового навыка (propose_new_skill)
+      const proposalResult = result.toolResults.find(
+        (r) => r.data && typeof r.data === 'object' && 'requestedAction' in (r.data as Record<string, unknown>)
+      );
+      if (proposalResult && proposalResult.data) {
+        const data = proposalResult.data as { requestedAction: string; suggestedSteps?: any[] };
+        const draft: Skill = {
+          id: 'skill-' + Date.now(),
+          displayName: data.requestedAction || 'Новый навык',
+          description: data.requestedAction || 'Пользовательский навык',
+          category: 'automation',
+          createdBy: 'user',
+          sandbox: SandboxLevel.Minimal,
+          phrases: { ru: [data.requestedAction], en: [] },
+          slots: {},
+          steps: data.suggestedSteps || [],
+          executionCount: 0,
+          createdAt: new Date().toISOString(),
+        };
+        setNewSkillDraft(draft);
+        setSkillCreatorOpen(true);
       }
 
       setJarvisState('executing');
@@ -219,118 +284,112 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
 
   // Голосовой сервис
   useEffect(() => {
-    const vs = getVoiceService({
-      ...jarvis.voice,
-      cloudProviders: jarvis.cloudProviders,
+    const vs = getVoiceService();
+
+    vs.updateConfig({
+      language: jarvis.voice.language,
+      wakeWord: jarvis.voice.wakeWord,
+      continuousWakeWord: jarvis.voice.continuousWakeWord,
+      ttsEnabled: jarvis.voice.ttsEnabled,
+      ttsVoice: jarvis.voice.ttsVoice,
+      ttsRate: jarvis.voice.ttsRate,
+      ttsPitch: jarvis.voice.ttsPitch,
+      sttEnabled: jarvis.voice.sttEnabled,
     });
 
-    const offState = vs.onStateChange((state) => {
+    const removeStateListener = vs.onStateChange((state) => {
       setJarvisState(state);
-      if (state !== 'listening') setMicVolume(0);
     });
 
-    const offTranscript = vs.onTranscript((text, isFinal) => {
-      if (!isFinal) setInterimText(text);
-      else setInterimText('');
-    });
-
-    const offCommand = vs.onCommand((text) => {
-      setInterimText('');
-      setMicVolume(0);
-      handleCommandRef.current(text);
-    });
-
-    const offError = vs.onError((errText) => {
-      addMessage('system', `⚠️ ${errText}`);
-    });
-
-    const offVolume = vs.onVolume((vol) => {
+    const removeVolumeListener = vs.onVolume((vol: number) => {
       setMicVolume(vol);
     });
 
-    // Запускаем wake word если включён
-    if (jarvis.voice.continuousWakeWord && jarvis.voice.sttEnabled) {
-      vs.startWakeWordListening();
+    const removeTranscriptListener = vs.onTranscript((text: string, isFinal: boolean) => {
+      setInterimText(text);
+      if (isFinal) setInterimText('');
+    });
+
+    const removeCommandListener = vs.onCommand((cmd: string) => {
+      setInterimText('');
+      handleCommandRef.current(cmd);
+    });
+
+    if (jarvis.voice.continuousWakeWord) {
+      vs.startWakeWordListening().catch(() => {});
     }
 
     return () => {
-      offState();
-      offTranscript();
-      offCommand();
-      offError();
-      offVolume();
+      removeStateListener();
+      removeVolumeListener();
+      removeTranscriptListener();
+      removeCommandListener();
     };
-  }, [jarvis.voice, jarvis.cloudProviders, setJarvisState, addMessage]);
+  }, [jarvis.voice]);
 
-  // Scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
-
-  const handleSend = () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inputText.trim()) return;
+    const text = inputText.trim();
+    setInputText('');
     handleCommand(text);
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  };
-
-  const toggleVoice = async () => {
+  const handleMicClick = async () => {
     const vs = getVoiceService();
     if (jarvisState === 'listening') {
-      await vs.stopListening();
+      vs.stopListening();
       setJarvisState('idle');
     } else {
-      await vs.startListening();
+      try {
+        await vs.startListening();
+      } catch (err) {
+        addMessage('system', `Ошибка активации микрофона: ${(err as Error).message}`);
+      }
     }
   };
 
-  const handleConfirm = async () => {
+  const handleConfirmAction = async () => {
     if (!pendingConfirmation) return;
+    const { toolName, args } = pendingConfirmation;
     setPendingConfirmation(null);
+
     setJarvisState('executing');
-
-    const result = await routeCommand('подтверждаю', {
-      userConfirmedDestructive: true,
-      pendingToolName: pendingConfirmation.toolName,
-      pendingToolArgs: pendingConfirmation.args,
-    });
-
-    addMessage('jarvis', result.response);
-    if (result.response) await getVoiceService().speak(result.response);
-    else setJarvisState('idle');
-  };
-
-  const handleFallbackSwitch = () => {
-    if (!providerFallback) return;
-    const newProvider = providerFallback.currentProvider === 'local' ? 'cloud' : 'local';
-    setJarvisConfig({ ...jarvis, provider: newProvider });
-    setProviderFallback(null);
-    addMessage('system', `Переключился на ${newProvider === 'local' ? 'локальный' : 'облачный'} провайдер.`);
+    try {
+      const result = await routeCommand('', {
+        userConfirmedDestructive: true,
+        pendingToolName: toolName,
+        pendingToolArgs: args,
+      });
+      addMessage('jarvis', result.response);
+      const vs = getVoiceService();
+      await vs.speak(result.response);
+    } catch (e) {
+      addMessage('system', `Ошибка: ${(e as Error).message}`);
+    } finally {
+      setJarvisState('idle');
+    }
   };
 
   if (!isOpen) return null;
 
-  const msgColors = { user: 'var(--accent-secondary)', jarvis: 'var(--accent-primary)', system: 'var(--text-muted)' };
+  const msgColors = {
+    user: 'var(--accent-primary)',
+    jarvis: 'var(--text-primary)',
+    system: '#ef4444',
+  };
 
-  // Индикатор громкости звука (0..10 делений)
   const volBars = Math.min(10, Math.round(micVolume / 10));
 
   return (
     <>
-      {/* Chat panel */}
       <div style={{
         position: 'fixed',
         bottom: 230,
         right: 16,
-        width: 350,
-        height: 480,
+        width: 'clamp(280px, 30vw, 380px)',
+        height: 'clamp(320px, 60vh, 520px)',
+        maxHeight: 'calc(100vh - 260px)',
         zIndex: 5000,
         background: 'rgba(8,10,16,0.94)',
         border: '1px solid var(--border-color)',
@@ -416,10 +475,32 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
                     🧠 Навык
                   </span>
                 )}
+                {msg.matchedVia === 'keyword' && (
+                  <span style={{ color: '#f59e0b', background: 'rgba(245,158,11,0.1)', padding: '0 4px', borderRadius: 2 }}>
+                    🔤 Ключевые слова
+                  </span>
+                )}
                 {msg.matchedVia === 'llm' && (
                   <span style={{ color: '#c084fc', background: 'rgba(192,132,252,0.1)', padding: '0 4px', borderRadius: 2 }}>
                     ☁️ {msg.providerUsed || 'AI Cloud'}
                   </span>
+                )}
+                {msg.canSaveAsSkill && (
+                  <button
+                    onClick={() => handleSaveAsSkill(msg.id)}
+                    style={{
+                      background: 'transparent',
+                      border: '1px solid var(--accent-primary)',
+                      borderRadius: 2,
+                      color: 'var(--accent-primary)',
+                      fontSize: 8.5,
+                      padding: '0 4px',
+                      cursor: 'pointer',
+                    }}
+                    title="Запомнить эту последовательность действий как навык"
+                  >
+                    💾 Запомнить
+                  </button>
                 )}
               </div>
             </div>
@@ -449,94 +530,118 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
-        <div style={{
-          padding: '8px 10px',
+        {/* Input area */}
+        <form onSubmit={handleSubmit} style={{
+          padding: '8px 12px',
           borderTop: '1px solid var(--border-color)',
-          display: 'flex', gap: 6, flexShrink: 0,
+          display: 'flex', gap: 6, alignItems: 'center',
+          flexShrink: 0,
         }}>
-          <input
-            ref={inputRef}
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Введите команду (напр: открой калькулятор)..."
-            disabled={jarvisState === 'thinking' || jarvisState === 'executing'}
-            style={{
-              flex: 1,
-              background: 'rgba(0,0,0,0.5)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 4,
-              color: 'var(--text-primary)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
-              padding: '6px 10px',
-              outline: 'none',
-            }}
-          />
-          {/* Mic button */}
           <button
-            onClick={toggleVoice}
-            title={jarvisState === 'listening' ? 'Остановить запись' : 'Голосовой ввод'}
+            type="button"
+            onClick={handleMicClick}
             style={{
-              padding: '6px 8px',
               background: jarvisState === 'listening' ? 'rgba(0,255,136,0.25)' : 'transparent',
               border: `1px solid ${jarvisState === 'listening' ? '#00ff88' : 'var(--border-color)'}`,
               borderRadius: 4,
-              cursor: 'pointer',
-              fontSize: 14,
               color: jarvisState === 'listening' ? '#00ff88' : 'var(--text-muted)',
-              boxShadow: jarvisState === 'listening' ? '0 0 10px rgba(0,255,136,0.4)' : undefined,
-              transition: 'all 0.15s ease',
-            }}
-          >
-            {jarvisState === 'listening' ? '⏹' : '🎤'}
-          </button>
-          {/* Send button */}
-          <button
-            onClick={handleSend}
-            disabled={!input.trim() || jarvisState === 'thinking' || jarvisState === 'executing'}
-            style={{
-              padding: '6px 10px',
-              background: 'rgba(79,70,229,0.2)',
-              border: '1px solid var(--accent-primary)',
-              borderRadius: 4,
-              color: 'var(--accent-primary)',
-              fontFamily: 'var(--font-mono)',
-              fontSize: 11,
+              padding: '5px 8px',
               cursor: 'pointer',
+              fontSize: 13,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              boxShadow: jarvisState === 'listening' ? '0 0 8px rgba(0,255,136,0.4)' : 'none',
+              transition: 'all 0.2s ease',
+            }}
+            title={jarvisState === 'listening' ? 'Остановить прослушивание' : 'Голосовой ввод'}
+          >
+            🎤
+          </button>
+
+          <input
+            ref={inputRef}
+            type="text"
+            value={inputText}
+            onChange={(e) => setInputText(e.target.value)}
+            placeholder="Спросите или введите команду..."
+            style={{
+              flex: 1,
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 4,
+              padding: '5px 8px',
+              fontSize: 11,
+              color: 'var(--text-primary)',
+              fontFamily: 'var(--font-mono)',
+              outline: 'none',
+            }}
+          />
+
+          <button
+            type="submit"
+            style={{
+              background: 'var(--accent-primary)',
+              border: 'none',
+              borderRadius: 4,
+              color: '#000',
+              padding: '5px 10px',
+              fontSize: 11,
               fontWeight: 700,
+              cursor: 'pointer',
+              fontFamily: 'var(--font-mono)',
             }}
           >
-            ▶
+            ↵
           </button>
-        </div>
+        </form>
       </div>
 
-      <ConfirmationModal
-        isOpen={!!pendingConfirmation}
-        toolName={pendingConfirmation?.toolName ?? ''}
-        description={pendingConfirmation?.description ?? ''}
-        args={pendingConfirmation?.args ?? {}}
-        onConfirm={handleConfirm}
-        onCancel={() => { setPendingConfirmation(null); setJarvisState('idle'); }}
+      {/* Confirmation Modal */}
+      {pendingConfirmation && (
+        <ConfirmationModal
+          isOpen={!!pendingConfirmation}
+          toolName={pendingConfirmation.toolName}
+          description={pendingConfirmation.description}
+          args={pendingConfirmation.args}
+          onConfirm={handleConfirmAction}
+          onCancel={() => setPendingConfirmation(null)}
+        />
+      )}
+
+      {/* Provider Fallback Modal */}
+      {providerFallback && (
+        <ProviderFallbackModal
+          isOpen={!!providerFallback}
+          currentProvider={providerFallback.currentProvider}
+          errorMessage={providerFallback.errorMessage}
+          onSwitch={() => {
+            const next = providerFallback.currentProvider === 'local' ? 'cloud' : 'local';
+            setJarvisConfig({ ...jarvis, provider: next });
+            setProviderFallback(null);
+            addMessage('system', `AI-провайдер переключён на ${next}.`);
+          }}
+          onCancel={() => setProviderFallback(null)}
+        />
+      )}
+
+      {/* Settings Modal */}
+      <JarvisSettings
+        isOpen={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
       />
 
-      <ProviderFallbackModal
-        isOpen={!!providerFallback}
-        currentProvider={providerFallback?.currentProvider ?? 'local'}
-        errorMessage={providerFallback?.errorMessage}
-        onSwitch={handleFallbackSwitch}
-        onCancel={() => setProviderFallback(null)}
-      />
-
-      <JarvisSettings isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />
-
+      {/* Skill Creator Modal */}
       <SkillCreator
         isOpen={skillCreatorOpen}
         initialSkill={newSkillDraft}
-        onSave={() => setSkillCreatorOpen(false)}
-        onClose={() => setSkillCreatorOpen(false)}
+        onClose={() => {
+          setSkillCreatorOpen(false);
+          setNewSkillDraft(null);
+        }}
+        onSave={(skill: Skill) => {
+          addMessage('jarvis', `Навык "${skill.displayName}" успешно сохранён, сэр.`);
+          setSkillCreatorOpen(false);
+          setNewSkillDraft(null);
+        }}
       />
     </>
   );

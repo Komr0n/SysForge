@@ -1,6 +1,8 @@
 // src/components/JarvisUI/ProviderFallbackModal.tsx
 // Модал при недоступности AI-провайдера
 
+import { useEffect } from 'react';
+
 interface ProviderFallbackModalProps {
   isOpen: boolean;
   currentProvider: 'local' | 'cloud';
@@ -16,6 +18,15 @@ export function ProviderFallbackModal({
   onSwitch,
   onCancel,
 }: ProviderFallbackModalProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onCancel]);
+
   if (!isOpen) return null;
 
   const fallbackProvider = currentProvider === 'local' ? 'облачный' : 'локальный';

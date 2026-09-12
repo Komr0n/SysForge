@@ -1,10 +1,12 @@
 // src/lib/jarvis/orchestrator.ts
 // LLM Orchestrator с поддержкой пула провайдеров, автоматического Fallback
-// и передачей истории сессии для полноценного multi-turn диалога.
+// и выполнением запросов через Rust Tauri backend (обход CSP и сокрытие ключей).
 
 import { JARVIS_TOOLS, toOpenAIToolSchema } from './tools-schema';
 import { skillRegistry } from './skill-registry';
 import { CloudProviderProfile } from '../../store/settingsStore';
+
+const isTauri = typeof window !== 'undefined' && ('__TAURI_INTERNALS__' in window || '__TAURI__' in window);
 
 export interface AIProviderConfig {
   provider: 'local' | 'cloud';
@@ -34,6 +36,7 @@ const JARVIS_SYSTEM_PROMPT = `Ты — Джарвис (J.A.R.V.I.S.), голос
 - Вызывай инструменты только когда нужно выполнить конкретное действие.
 - Для опасных действий (kill_process, delete_file, lock_screen) объясни, что требуется подтверждение.
 - Если загружен из истории разговора — помни что было сказано ранее и ссылайся на это.
+- Если пользователь просит сделать что-то, для чего нет готового инструмента — вызови propose_new_skill с описанием того, какие шаги нужны.
 - Не повторяй вопрос пользователя.
 - Отвечай на том же языке, на котором написан вопрос.`;
 
@@ -51,6 +54,39 @@ export class JarvisOrchestrator {
 
   abort() {
     this.abortController?.abort();
+  }
+
+  /** Выполнить HTTP-запрос к LLM через Rust backend (в Tauri) или через fetch (в браузере) */
+  private async postLlm(
+    url: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>
+  ): Promise<any> {
+    if (isTauri) {
+      try {
+        const { invoke } = await import('@tauri-apps/api/core');
+        const data = await invoke('jarvis_llm_request', {
+          req: { url, headers, body },
+        });
+        return data;
+      } catch (err) {
+        throw new Error((err as Error).message || String(err));
+      }
+    } else {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(body),
+        signal: this.abortController?.signal,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text().catch(() => response.statusText);
+        throw new Error(`HTTP ${response.status}: ${errText}`);
+      }
+
+      return await response.json();
+    }
   }
 
   /**
@@ -133,19 +169,8 @@ export class JarvisOrchestrator {
       max_tokens: 512,
     };
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: this.abortController?.signal,
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => response.statusText);
-      throw new Error(`Ollama HTTP ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as { choices: Array<{ message: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }> };
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const data = await this.postLlm(url, headers, body);
     const parsed = this.parseOpenAIResponse(data);
     return { ...parsed, providerUsed: 'Ollama (Local)' };
   }
@@ -247,19 +272,7 @@ export class JarvisOrchestrator {
       headers['X-Title'] = 'SysForge Jarvis';
     }
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: this.abortController?.signal,
-    });
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => response.statusText);
-      throw new Error(`HTTP ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json() as { choices: Array<{ message: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }> };
+    const data = await this.postLlm(url, headers, body);
     return this.parseOpenAIResponse(data);
   }
 
@@ -287,9 +300,15 @@ export class JarvisOrchestrator {
   async checkAvailability(providerProfile?: CloudProviderProfile): Promise<{ available: boolean; error?: string }> {
     try {
       if (this.config.provider === 'local' && !providerProfile) {
-        const response = await fetch(`${this.config.local.ollamaUrl}/models`, {
-          signal: AbortSignal.timeout(3000),
-        });
+        const url = `${this.config.local.ollamaUrl}/models`;
+        if (isTauri) {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('jarvis_llm_request', {
+            req: { url, headers: {}, body: {} },
+          });
+          return { available: true };
+        }
+        const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
         return { available: response.ok };
       }
 
@@ -309,7 +328,16 @@ export class JarvisOrchestrator {
         headers['X-Title'] = 'SysForge Jarvis';
       }
 
-      const response = await fetch(`${baseUrl}/models`, {
+      const url = `${baseUrl}/models`;
+      if (isTauri) {
+        const { invoke } = await import('@tauri-apps/api/core');
+        await invoke('jarvis_llm_request', {
+          req: { url, headers, body: {} },
+        });
+        return { available: true };
+      }
+
+      const response = await fetch(url, {
         headers,
         signal: AbortSignal.timeout(6000),
       });

@@ -296,7 +296,14 @@ export const useSettingsStore = create<SettingsState>()(
       storage: createJSONStorage(() => tauriStorageAdapter),
       partialize: (state) => {
         const { apiKeys, ...rest } = state;
-        return rest;
+        return {
+          ...rest,
+          jarvis: {
+            ...rest.jarvis,
+            cloud: { ...rest.jarvis.cloud, apiKey: '' },
+            cloudProviders: (rest.jarvis.cloudProviders || []).map((p) => ({ ...p, apiKey: '' })),
+          },
+        };
       },
       merge: (persisted, current) => {
         const saved = persisted as Partial<SettingsState> & {
@@ -323,29 +330,28 @@ export const useSettingsStore = create<SettingsState>()(
         }
 
         if (saved.jarvis) {
+          const currentProviders = current.jarvis.cloudProviders || DEFAULT_CLOUD_PROVIDERS;
           const savedProviders = saved.jarvis.cloudProviders && saved.jarvis.cloudProviders.length > 0
             ? DEFAULT_CLOUD_PROVIDERS.map((def) => {
-                const found = saved.jarvis?.cloudProviders?.find((p) => p.id === def.id);
-                return found ? { ...def, ...found } : def;
+                const foundSaved = saved.jarvis?.cloudProviders?.find((p) => p.id === def.id);
+                const foundCurrent = currentProviders.find((p) => p.id === def.id);
+                return {
+                  ...def,
+                  ...foundSaved,
+                  apiKey: foundCurrent?.apiKey || foundSaved?.apiKey || '',
+                };
               })
-            : DEFAULT_CLOUD_PROVIDERS;
-
-          // Migrate legacy single apiKey if present
-          if (saved.jarvis.cloud?.apiKey) {
-            const gemini = savedProviders.find((p) => p.id === 'gemini');
-            const openai = savedProviders.find((p) => p.id === 'openai');
-            if (saved.jarvis.cloud.apiKey.startsWith('AIzaSy') && gemini && !gemini.apiKey) {
-              gemini.apiKey = saved.jarvis.cloud.apiKey;
-            } else if (openai && !openai.apiKey) {
-              openai.apiKey = saved.jarvis.cloud.apiKey;
-            }
-          }
+            : currentProviders;
 
           merged.jarvis = {
             ...DEFAULT_JARVIS_CONFIG,
             ...saved.jarvis,
             local: { ...DEFAULT_JARVIS_CONFIG.local, ...saved.jarvis.local },
-            cloud: { ...DEFAULT_JARVIS_CONFIG.cloud, ...saved.jarvis.cloud },
+            cloud: {
+              ...DEFAULT_JARVIS_CONFIG.cloud,
+              ...saved.jarvis.cloud,
+              apiKey: current.jarvis.cloud.apiKey || saved.jarvis.cloud?.apiKey || '',
+            },
             voice: { ...DEFAULT_JARVIS_CONFIG.voice, ...saved.jarvis.voice },
             cloudProviders: savedProviders,
             autoFallbackOnRateLimit: saved.jarvis.autoFallbackOnRateLimit ?? true,

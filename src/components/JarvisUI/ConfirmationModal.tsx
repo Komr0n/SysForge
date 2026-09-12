@@ -1,6 +1,8 @@
 // src/components/JarvisUI/ConfirmationModal.tsx
 // Модальное окно подтверждения деструктивных действий
 
+import { useEffect } from 'react';
+
 interface ConfirmationModalProps {
   isOpen: boolean;
   toolName: string;
@@ -18,6 +20,15 @@ export function ConfirmationModal({
   onConfirm,
   onCancel,
 }: ConfirmationModalProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCancel();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, onCancel]);
+
   if (!isOpen) return null;
 
   const argsStr = Object.entries(args)

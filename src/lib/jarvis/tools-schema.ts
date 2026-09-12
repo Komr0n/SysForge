@@ -1,38 +1,53 @@
 // src/lib/jarvis/tools-schema.ts
-// Полная схема всех инструментов Джарвиса для LLM function calling и валидации навыков
+// Схемы инструментов Джарвиса в формате OpenAI function calling
 
-export type SafetyLevel = 'safe' | 'requires_confirmation';
+export interface ToolParameter {
+  type: string;
+  description?: string;
+  enum?: string[];
+  items?: { type: string; properties?: Record<string, unknown> };
+  properties?: Record<string, unknown>;
+}
 
 export interface JarvisTool {
   name: string;
   description: string;
-  safetyLevel: SafetyLevel;
-  requiresAudit: boolean;
   parameters: {
     type: 'object';
-    properties: Record<string, { type: string; description: string; enum?: string[] }>;
+    properties: Record<string, ToolParameter>;
     required?: string[];
   };
+  safetyLevel: 'safe' | 'requires_confirmation';
+  requiresAudit: boolean;
 }
 
 export const JARVIS_TOOLS: JarvisTool[] = [
-  // ── Minimal ──────────────────────────────────────────────────────────────
+  // ── Minimal (UI SysForge) ──────────────────────────────────────────────────
   {
     name: 'open_app',
-    description: 'Открыть мини-приложение SysForge по его ID (ping, traceroute, processes и т.д.)',
+    description: 'Открыть мини-программу SysForge в окне',
     safetyLevel: 'safe',
     requiresAudit: false,
     parameters: {
       type: 'object',
       properties: {
-        appId: { type: 'string', description: 'ID приложения: ping, traceroute, port-scanner, bandwidth, dns, ssh, wol, hash, ssl, password, ip-intel, subnet, jwt, cve, processes, system-overview, log, file-hash, api-tester, formatter, encoder, regex, snippets, diff' },
+        appId: {
+          type: 'string',
+          description: 'ID приложения',
+          enum: [
+            'ping', 'traceroute', 'port-scanner', 'bandwidth', 'dns', 'ssh', 'wol',
+            'hash', 'ssl', 'password', 'ip-intel', 'subnet', 'jwt', 'cve',
+            'processes', 'system-overview', 'logs', 'file-hash',
+            'api-tester', 'formatter', 'encoder', 'regex', 'snippets', 'diff',
+          ],
+        },
       },
       required: ['appId'],
     },
   },
   {
     name: 'close_app',
-    description: 'Закрыть открытое мини-приложение SysForge по его ID',
+    description: 'Закрыть открытое окно мини-программы SysForge',
     safetyLevel: 'safe',
     requiresAudit: false,
     parameters: {
@@ -45,7 +60,7 @@ export const JARVIS_TOOLS: JarvisTool[] = [
   },
   {
     name: 'set_theme',
-    description: 'Изменить тему интерфейса SysForge',
+    description: 'Изменить цветовую тему интерфейса SysForge',
     safetyLevel: 'safe',
     requiresAudit: false,
     parameters: {
@@ -85,27 +100,60 @@ export const JARVIS_TOOLS: JarvisTool[] = [
     parameters: {
       type: 'object',
       properties: {
-        url: { type: 'string', description: 'URL для открытия (должен начинаться с https://)' },
+        url: { type: 'string', description: 'URL для открытия (должен начинаться с https:// или http://)' },
       },
       required: ['url'],
     },
   },
   {
     name: 'open_system_app',
-    description: 'Запустить системное приложение Windows (калькулятор, блокнот, проводник, cmd, диспетчер задач и т.д.)',
+    description: 'Запустить системное приложение Windows из доверенного списка (калькулятор, блокнот, проводник, cmd, диспетчер задач, paint, powershell)',
+    safetyLevel: 'safe',
+    requiresAudit: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        appId: {
+          type: 'string',
+          description: 'Идентификатор системного приложения',
+          enum: ['calculator', 'notepad', 'explorer', 'task_manager', 'paint', 'cmd', 'powershell'],
+        },
+        displayName: { type: 'string', description: 'Понятное название программы (Калькулятор, Блокнот и т.д.)' },
+      },
+      required: ['appId'],
+    },
+  },
+
+  // ── Discovery & App Registry ───────────────────────────────────────────────
+  {
+    name: 'discover_app',
+    description: 'Найти установленную в Windows программу по имени (например: photoshop, blender, telegram, vlc, discord, steam)',
     safetyLevel: 'safe',
     requiresAudit: false,
     parameters: {
       type: 'object',
       properties: {
-        program: { type: 'string', description: 'Имя исполняемого файла или команды (например: calc.exe, notepad.exe, explorer.exe, taskmgr.exe, cmd.exe, mspaint.exe)' },
-        displayName: { type: 'string', description: 'Понятное название программы (Калькулятор, Блокнот и т.д.)' },
+        query: { type: 'string', description: 'Имя программы для поиска' },
       },
-      required: ['program'],
+      required: ['query'],
+    },
+  },
+  {
+    name: 'launch_registered_app',
+    description: 'Запустить пользовательское зарегистрированное приложение по проверенному пути',
+    safetyLevel: 'safe',
+    requiresAudit: true,
+    parameters: {
+      type: 'object',
+      properties: {
+        exePath: { type: 'string', description: 'Полный путь к .exe файлу' },
+        displayName: { type: 'string', description: 'Название программы' },
+      },
+      required: ['exePath', 'displayName'],
     },
   },
 
-  // ── Standard ─────────────────────────────────────────────────────────────
+  // ── Standard (System Read-only) ───────────────────────────────────────────
   {
     name: 'get_system_status',
     description: 'Получить текущее состояние системы: CPU, RAM, диски',
@@ -151,42 +199,43 @@ export const JARVIS_TOOLS: JarvisTool[] = [
       type: 'object',
       properties: {
         host: { type: 'string', description: 'IP-адрес или доменное имя' },
-        maxHops: { type: 'number', description: 'Максимальное число хопов (по умолчанию 30)' },
+        maxHops: { type: 'number', description: 'Максимальное число прыжков (по умолчанию 15)' },
       },
       required: ['host'],
     },
   },
 
-  // ── Full (деструктивные — требуют подтверждения) ──────────────────────────
+  // ── Full (Destructive / Confirmation required) ────────────────────────────
   {
     name: 'kill_process',
-    description: 'Принудительно завершить процесс по PID или имени. ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ ПОЛЬЗОВАТЕЛЯ.',
+    description: 'Завершить процесс по имени или PID (требует подтверждения)',
     safetyLevel: 'requires_confirmation',
     requiresAudit: true,
     parameters: {
       type: 'object',
       properties: {
-        pid: { type: 'number', description: 'PID процесса для завершения' },
-        processName: { type: 'string', description: 'Имя процесса (альтернатива PID)' },
+        target: { type: 'string', description: 'Имя процесса или PID' },
+        isPid: { type: 'boolean', description: 'true если target это PID' },
       },
+      required: ['target'],
     },
   },
   {
     name: 'delete_file',
-    description: 'Удалить файл по пути. ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ ПОЛЬЗОВАТЕЛЯ.',
+    description: 'Удалить файл в безопасной директории (требует подтверждения)',
     safetyLevel: 'requires_confirmation',
     requiresAudit: true,
     parameters: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Абсолютный путь к файлу для удаления' },
+        path: { type: 'string', description: 'Путь к файлу' },
       },
       required: ['path'],
     },
   },
   {
     name: 'lock_screen',
-    description: 'Заблокировать экран рабочей станции. ТРЕБУЕТ ПОДТВЕРЖДЕНИЯ ПОЛЬЗОВАТЕЛЯ.',
+    description: 'Заблокировать экран Windows (требует подтверждения)',
     safetyLevel: 'requires_confirmation',
     requiresAudit: true,
     parameters: {
@@ -218,6 +267,30 @@ export const JARVIS_TOOLS: JarvisTool[] = [
     parameters: {
       type: 'object',
       properties: {},
+    },
+  },
+  {
+    name: 'propose_new_skill',
+    description: 'Вызывается, когда для запроса пользователя ещё нет навыка. Не выполняет действие — предлагает создать новый навык.',
+    safetyLevel: 'safe',
+    requiresAudit: false,
+    parameters: {
+      type: 'object',
+      properties: {
+        requestedAction: { type: 'string', description: 'Описание действия' },
+        suggestedSteps: {
+          type: 'array',
+          description: 'Предлагаемые шаги',
+          items: {
+            type: 'object',
+            properties: {
+              tool: { type: 'string' },
+              args: { type: 'object' },
+            },
+          },
+        },
+      },
+      required: ['requestedAction', 'suggestedSteps'],
     },
   },
 ];

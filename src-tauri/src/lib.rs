@@ -520,26 +520,143 @@ async fn jarvis_open_url(url: String) -> Result<(), String> {
     }
 }
 
-#[tauri::command]
-async fn jarvis_open_system_app(program: String) -> Result<String, String> {
-    if program.trim().is_empty() {
-        return Err("Program name cannot be empty".to_string());
+fn resolve_whitelisted_app(id: &str) -> Option<&'static str> {
+    match id.to_lowercase().as_str() {
+        "calculator" | "calc" | "calc.exe" => Some("calc.exe"),
+        "notepad" | "notepad.exe" => Some("notepad.exe"),
+        "explorer" | "file_explorer" | "explorer.exe" => Some("explorer.exe"),
+        "task_manager" | "taskmgr" | "taskmgr.exe" => Some("taskmgr.exe"),
+        "paint" | "mspaint" | "mspaint.exe" => Some("mspaint.exe"),
+        "cmd" | "terminal" | "cmd.exe" => Some("cmd.exe"),
+        "powershell" | "powershell.exe" => Some("powershell.exe"),
+        _ => None,
     }
+}
 
+#[tauri::command]
+async fn jarvis_open_system_app(app_id: String) -> Result<String, String> {
+    let resolved = resolve_whitelisted_app(&app_id).ok_or_else(|| {
+        format!("'{}' не в списке разрешённых системных программ.", app_id)
+    })?;
+
+    let task = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(resolved);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        cmd.spawn()
+    });
+
+    match task.await {
+        Ok(Ok(_)) => Ok(format!("Запущено: {}", resolved)),
+        Ok(Err(e)) => Err(format!("Не удалось запустить {}: {}", resolved, e)),
+        Err(e) => Err(format!("Задача запуска завершилась с ошибкой: {}", e)),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct LlmChatRequest {
+    url: String,
+    headers: std::collections::HashMap<String, String>,
+    body: serde_json::Value,
+}
+
+#[tauri::command]
+async fn jarvis_llm_request(req: LlmChatRequest) -> Result<serde_json::Value, String> {
+    if !req.url.starts_with("https://")
+        && !req.url.starts_with("http://localhost")
+        && !req.url.starts_with("http://127.0.0.1")
+    {
+        return Err("Разрешены только https:// или локальный Ollama (localhost)".into());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut builder = client.post(&req.url).json(&req.body);
+    for (k, v) in &req.headers {
+        builder = builder.header(k, v);
+    }
+    let resp = builder.send().await.map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status, json));
+    }
+    Ok(json)
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct AppCandidate {
+    display_name: String,
+    exe_path: String,
+}
+
+#[tauri::command]
+async fn jarvis_find_app(query: String) -> Result<Vec<AppCandidate>, String> {
+    let mut candidates = Vec::new();
     #[cfg(target_os = "windows")]
     {
-        let res = run_cmd_timeout("cmd", &["/c", "start", "", &program], 5).await;
-        res.map(|_| format!("Started {}", program))
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+        if let Ok(app_paths) = hklm.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") {
+            for name in app_paths.enum_keys().flatten() {
+                if name.to_lowercase().contains(&query.to_lowercase()) {
+                    if let Ok(sub) = app_paths.open_subkey(&name) {
+                        if let Ok(path) = sub.get_value::<String, _>("") {
+                            candidates.push(AppCandidate {
+                                display_name: name.trim_end_matches(".exe").to_string(),
+                                exe_path: path,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        if let Ok(app_paths) = hkcu.open_subkey(r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths") {
+            for name in app_paths.enum_keys().flatten() {
+                if name.to_lowercase().contains(&query.to_lowercase()) {
+                    if let Ok(sub) = app_paths.open_subkey(&name) {
+                        if let Ok(path) = sub.get_value::<String, _>("") {
+                            if !candidates.iter().any(|c| c.exe_path == path) {
+                                candidates.push(AppCandidate {
+                                    display_name: name.trim_end_matches(".exe").to_string(),
+                                    exe_path: path,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
-    #[cfg(target_os = "macos")]
-    {
-        let res = run_cmd_timeout("open", &[&program], 5).await;
-        res.map(|_| format!("Started {}", program))
+    Ok(candidates)
+}
+
+#[tauri::command]
+async fn jarvis_launch_registered_app(exe_path: String, display_name: String) -> Result<String, String> {
+    if !std::path::Path::new(&exe_path).exists() {
+        return Err(format!("Файл '{}' не существует на диске.", exe_path));
     }
-    #[cfg(target_os = "linux")]
-    {
-        let res = run_cmd_timeout("xdg-open", &[&program], 5).await;
-        res.map(|_| format!("Started {}", program))
+    let task = tokio::task::spawn_blocking(move || {
+        let mut cmd = std::process::Command::new(&exe_path);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000);
+        }
+        cmd.spawn()
+    });
+
+    match task.await {
+        Ok(Ok(_)) => Ok(format!("Запускаю {}", display_name)),
+        Ok(Err(e)) => Err(format!("Не удалось запустить {}: {}", display_name, e)),
+        Err(e) => Err(format!("Ошибка запуска: {}", e)),
     }
 }
 
@@ -555,16 +672,6 @@ async fn jarvis_lock_screen() -> Result<(), String> {
     {
         Err("Lock screen not supported on this OS".to_string())
     }
-}
-
-#[tauri::command]
-fn delete_file(path: String) -> Result<String, String> {
-    if path.is_empty() {
-        return Err("Path cannot be empty".to_string());
-    }
-    std::fs::remove_file(&path)
-        .map(|_| format!("File '{}' deleted successfully.", path))
-        .map_err(|e| format!("Failed to delete file '{}': {}", path, e))
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -708,13 +815,15 @@ pub fn run() {
             dns_lookup,
             traceroute_host,
             run_terminal_command,
-            delete_file,
             jarvis_match_intent,
             jarvis_build_intent_index,
             jarvis_reindex_skill,
             jarvis_open_url,
             jarvis_open_system_app,
             jarvis_lock_screen,
+            jarvis_llm_request,
+            jarvis_find_app,
+            jarvis_launch_registered_app,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
