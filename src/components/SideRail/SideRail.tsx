@@ -102,7 +102,7 @@ export default function SideRail() {
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
         {widgets.globe && (
           <div style={{ borderBottom: '1px solid var(--border-color)', background: 'rgba(0,0,0,0.2)' }}>
-            <GlobeWidget />
+            <GlobeWidget height={240} />
           </div>
         )}
         {widgets.networkMonitor && (

@@ -80,6 +80,7 @@ export class VoiceService {
   private commandWaitTimer: ReturnType<typeof setTimeout> | null = null;
   private speechEndTimer: ReturnType<typeof setTimeout> | null = null;
   private followUpTimer: ReturnType<typeof setTimeout> | null = null;
+  private maxCommandTimer: ReturnType<typeof setTimeout> | null = null;
   public isFollowUpWindow = false;
   private _pendingFollowUp = false;
   private followUpListeners: ((isFollowUp: boolean) => void)[] = [];
@@ -278,12 +279,19 @@ export class VoiceService {
     await this.audioRecorder.start({
       onVolume: (vol) => this.notifyVolume(vol),
       onSilence: () => {
-        // При тишине финализируем запись
-        if (this.isCommandMode && (this.lastCapturedText || this.interimAccumulator)) {
+        // При наступлении тишины после речи финализируем запись
+        if (this.isCommandMode) {
           this.stopListening();
         }
       },
     });
+
+    // Максимальный таймаут записи (7.5 секунд), предотвращающий зависание в режиме слушания
+    this.maxCommandTimer = setTimeout(() => {
+      if (this.isCommandMode) {
+        this.stopListening();
+      }
+    }, 7500);
 
     // 2. Если Web Speech API доступен — запускаем параллельно
     if (isSpeechRecognitionSupported) {
@@ -317,20 +325,23 @@ export class VoiceService {
       if (captured) {
         this.onCommandReceived(captured);
       } else if (audioBlob && audioBlob.size > 2000) {
-        // Пробуем Whisper fallback если Web Speech не дал текста
+        // Задействуем транскрипцию через Gemini / Groq / OpenAI
         this.setState('thinking');
-        const whisperText = await transcribeAudioBlob(audioBlob, this.config.cloudProviders);
-        if (whisperText) {
-          this.onCommandReceived(whisperText);
+        const transcribedText = await transcribeAudioBlob(audioBlob, this.config.cloudProviders);
+        if (transcribedText) {
+          this.onCommandReceived(transcribedText);
         } else {
           this.setState('idle');
+          this.notifyError('Голос записан, но распознать текст не удалось. Убедитесь, что настроен API-ключ Gemini или Groq.');
           if (this.config.continuousWakeWord) {
-            setTimeout(() => this.startWakeWordListening(), 300);
+            setTimeout(() => this.startWakeWordListening(), 400);
           }
         }
       } else {
+        this.setState('idle');
+        this.notifyError('Голос не обнаружен. Нажмите микрофон и произнесите команду.');
         if (this.config.continuousWakeWord) {
-          setTimeout(() => this.startWakeWordListening(), 300);
+          setTimeout(() => this.startWakeWordListening(), 400);
         }
       }
     }
@@ -349,6 +360,7 @@ export class VoiceService {
     if (this.commandWaitTimer) { clearTimeout(this.commandWaitTimer); this.commandWaitTimer = null; }
     if (this.speechEndTimer) { clearTimeout(this.speechEndTimer); this.speechEndTimer = null; }
     if (this.followUpTimer) { clearTimeout(this.followUpTimer); this.followUpTimer = null; }
+    if (this.maxCommandTimer) { clearTimeout(this.maxCommandTimer); this.maxCommandTimer = null; }
   }
 
   private initRecognition(continuous: boolean) {

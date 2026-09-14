@@ -11,8 +11,8 @@ interface DraggableWidgetProps {
   id: string;
   initialX?: number;
   initialY?: number;
-  /** Place widget in a corner when no saved position exists */
-  anchor?: 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left';
+  /** Place widget in a corner or center when no saved position exists */
+  anchor?: 'top-left' | 'top-right' | 'bottom-right' | 'bottom-left' | 'center';
   width?: number;
   height?: number;
   title?: string;
@@ -38,6 +38,11 @@ export default function DraggableWidget({
     const margin = 16;
 
     switch (anchor) {
+      case 'center':
+        return {
+          x: Math.max(margin, Math.round((pw - width) / 2)),
+          y: Math.max(margin, Math.round((ph - 380) / 2)),
+        };
       case 'top-right':
         return { x: pw - width - margin, y: margin };
       case 'bottom-right':

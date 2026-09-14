@@ -144,7 +144,9 @@ export async function routeCommand(
       });
     }
 
-    const response = direct.displayText;
+    const response = (direct.toolName === 'close_os_app' || direct.toolName === 'close_app')
+      ? (toolResult.message || direct.displayText)
+      : direct.displayText;
     sessionHistory.addAssistant(response, [direct.toolName]);
 
     return {

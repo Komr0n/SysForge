@@ -58,17 +58,27 @@ export class AudioRecorder {
 
     // 2. AudioContext + Analyser для визуализации громкости и VAD
     try {
-      this.audioCtx = new AudioContext();
+      const AudioCtxClass = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      this.audioCtx = new AudioCtxClass();
+      if (this.audioCtx.state === 'suspended') {
+        this.audioCtx.resume().catch(() => {});
+      }
       const source = this.audioCtx.createMediaStreamSource(this.mediaStream);
       this.analyser = this.audioCtx.createAnalyser();
       this.analyser.fftSize = 256;
+      this.analyser.smoothingTimeConstant = 0.3;
       source.connect(this.analyser);
 
       const bufferLength = this.analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
+      let hasUserSpoken = false;
 
       const updateMeter = () => {
         if (!this.isRecording || !this.analyser) return;
+
+        if (this.audioCtx && this.audioCtx.state === 'suspended') {
+          this.audioCtx.resume().catch(() => {});
+        }
 
         this.analyser.getByteFrequencyData(dataArray);
         let sum = 0;
@@ -80,19 +90,20 @@ export class AudioRecorder {
 
         events.onVolume?.(volume);
 
-        // VAD: если громкость выше порога, сбрасываем таймер тишины
-        if (volume > 15) {
+        // VAD: порог человеческой речи
+        if (volume > 8) {
+          hasUserSpoken = true;
           if (this.silenceTimer) {
             clearTimeout(this.silenceTimer);
             this.silenceTimer = null;
           }
-        } else if (!this.silenceTimer) {
-          // Тишина — ставим таймер на 2 сек
+        } else if (hasUserSpoken && !this.silenceTimer) {
+          // Тишина ПОСЛЕ того как пользователь заговорил — ставим таймер на 1.4 сек
           this.silenceTimer = setTimeout(() => {
             if (this.isRecording) {
               events.onSilence?.();
             }
-          }, 2000);
+          }, 1400);
         }
 
         this.animFrameId = requestAnimationFrame(updateMeter);

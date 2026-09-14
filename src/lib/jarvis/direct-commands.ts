@@ -97,14 +97,38 @@ const APPS: AppDef[] = [
   },
   {
     appId: 'chrome', displayName: 'Chrome',
-    aliases: ['хром', 'хрома', 'chrome', 'гугл хром', 'google chrome'],
-    processNames: ['chrome.exe', 'chrome'],
+    aliases: ['хром', 'хрома', 'chrome', 'гугл хром', 'google chrome', 'браузер', 'браузера', 'browser', 'интернет', 'яндекс', 'яндекс браузер', 'edge', 'msedge', 'opera', 'firefox'],
+    processNames: ['chrome.exe', 'msedge.exe', 'browser.exe', 'opera.exe', 'firefox.exe', 'chrome'],
     kind: 'url', urlOrNothing: 'https://google.com',
   },
   {
     appId: 'telegram', displayName: 'Telegram',
     aliases: ['телеграм', 'телеграма', 'телега', 'telegram'],
-    processNames: ['telegram.exe', 'telegram'],
+    processNames: ['Telegram.exe', 'telegram.exe', 'telegram'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'discord', displayName: 'Discord',
+    aliases: ['дискорд', 'дискорда', 'discord'],
+    processNames: ['Discord.exe', 'discord.exe', 'Discord'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'spotify', displayName: 'Spotify',
+    aliases: ['спотифай', 'spotify', 'музыка'],
+    processNames: ['Spotify.exe', 'spotify.exe', 'Spotify'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'steam', displayName: 'Steam',
+    aliases: ['стим', 'steam'],
+    processNames: ['steam.exe', 'Steam.exe', 'steam'],
+    kind: 'system_app',
+  },
+  {
+    appId: 'vlc', displayName: 'VLC',
+    aliases: ['vlc', 'влс', 'проигрыватель'],
+    processNames: ['vlc.exe', 'vlc'],
     kind: 'system_app',
   },
   {
@@ -273,7 +297,7 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
     },
   },
 
-  // ── Приложения SysForge ───────────────────────────────────────────────────────
+  // ── Приложения SysForge (Открытие и Закрытие) ───────────────────────────────
   {
     patterns: [
       prog('(открой|запусти|покажи|open)\\s+(процессы|менеджер процессов)'),
@@ -283,6 +307,16 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
       toolName: 'open_app',
       args: { appId: 'processes' },
       displayText: 'Открываю менеджер процессов SysForge.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(процессы|менеджер процессов)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'processes' },
+      displayText: 'Закрываю менеджер процессов.',
     }),
   },
   {
@@ -297,6 +331,116 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
   },
   {
     patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(обзор системы|системный обзор|system overview)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'system-overview' },
+      displayText: 'Закрываю системный обзор.',
+    }),
+  },
+  {
+    patterns: [
+      prog('(открой|запусти|open)\\s+(терминал|консоль|powershell pty|pty terminal|терминал pty)'),
+    ],
+    handler: () => ({
+      toolName: 'open_app',
+      args: { appId: 'terminal' },
+      displayText: 'Открываю PTY терминал SysForge.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(терминал|консоль|pty terminal)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'terminal' },
+      displayText: 'Закрываю терминал SysForge.',
+    }),
+  },
+  {
+    patterns: [
+      prog('(открой|запусти|open)\\s+(автозагрузк[уа]|менеджер автозагрузки|startup manager)'),
+    ],
+    handler: () => ({
+      toolName: 'open_app',
+      args: { appId: 'startup-manager' },
+      displayText: 'Открываю менеджер автозагрузки.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(автозагрузк[уа]|менеджер автозагрузки|startup manager)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'startup-manager' },
+      displayText: 'Закрываю менеджер автозагрузки.',
+    }),
+  },
+  {
+    patterns: [
+      prog('(открой|запусти|open)\\s+(анализатор диска|диск|занятое место|disk analyzer)'),
+    ],
+    handler: () => ({
+      toolName: 'open_app',
+      args: { appId: 'disk-analyzer' },
+      displayText: 'Открываю анализатор занятого места на диске.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(анализатор диска|диск|disk analyzer)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'disk-analyzer' },
+      displayText: 'Закрываю анализатор диска.',
+    }),
+  },
+  {
+    patterns: [
+      prog('(открой|запусти|open)\\s+(поиск дублей|поиск дубликатов|дубли|дубликаты|duplicate finder)'),
+    ],
+    handler: () => ({
+      toolName: 'open_app',
+      args: { appId: 'duplicate-finder' },
+      displayText: 'Открываю поиск дубликатов файлов.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(поиск дублей|поиск дубликатов|дубли|дубликаты|duplicate finder)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'duplicate-finder' },
+      displayText: 'Закрываю поиск дубликатов файлов.',
+    }),
+  },
+  {
+    patterns: [
+      prog('(открой|запусти|open)\\s+(проводник файлов|поиск файлов|file explorer)'),
+    ],
+    handler: () => ({
+      toolName: 'open_app',
+      args: { appId: 'file-explorer' },
+      displayText: 'Открываю быстрый файловый проводник.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(проводник файлов|поиск файлов|file explorer)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'file-explorer' },
+      displayText: 'Закрываю файловый проводник.',
+    }),
+  },
+  {
+    patterns: [
       prog('(открой|запусти|open)\\s+(пинг|ping)'),
       prog('^(инструмент пинг|утилита пинг)$'),
     ],
@@ -304,6 +448,16 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
       toolName: 'open_app',
       args: { appId: 'ping' },
       displayText: 'Открываю инструмент Ping.',
+    }),
+  },
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(пинг|ping)`),
+    ],
+    handler: () => ({
+      toolName: 'close_app',
+      args: { appId: 'ping' },
+      displayText: 'Закрываю инструмент Ping.',
     }),
   },
   {
@@ -385,6 +539,21 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
       args: { appId: 'password' },
       displayText: 'Открываю генератор паролей.',
     }),
+  },
+  // Универсальное закрытие любого произвольного процесса по имени
+  {
+    patterns: [
+      prog(`(${CLOSE_VERBS})\\s+(?:все\\s+)?(?:программы?\\s+|приложени[ея]\\s+|окн[оа]\\s+)?(?:процесс[ыа]?\\s+)?([a-zA-Zа-яА-Я0-9_.-]+)`),
+    ],
+    handler: (m) => {
+      const target = (m[2] || '').trim();
+      const exeName = target.endsWith('.exe') ? target : `${target}.exe`;
+      return {
+        toolName: 'close_os_app',
+        args: { appName: exeName, allProcessNames: [exeName, target] },
+        displayText: `Закрываю ${target}, сэр.`,
+      };
+    },
   },
 
   // ── Системная информация ──────────────────────────────────────────────────────

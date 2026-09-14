@@ -289,8 +289,8 @@ export class JarvisOrchestrator {
     if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
     const apiKey = profile.apiKey.trim();
-    const isGemini = baseUrl.includes('generativelanguage.googleapis.com') || apiKey.startsWith('AIzaSy');
-    const model = profile.model.trim() || (isGemini ? 'gemini-1.5-flash' : 'gpt-4o-mini');
+    const isGemini = baseUrl.includes('generativelanguage.googleapis.com') || apiKey.startsWith('AIzaSy') || apiKey.startsWith('AQ.');
+    let model = profile.model.trim() || (isGemini ? 'gemini-3.6-flash' : 'gpt-4o-mini');
     const url = `${baseUrl}/chat/completions`;
 
     const messages = [
@@ -299,7 +299,7 @@ export class JarvisOrchestrator {
       { role: 'user', content: userText },
     ];
 
-    const body = {
+    const body: Record<string, unknown> = {
       model,
       messages,
       tools,
@@ -318,8 +318,20 @@ export class JarvisOrchestrator {
       headers['X-Title'] = 'SysForge Jarvis';
     }
 
-    const data = await this.postLlm(url, headers, body);
-    return this.parseOpenAIResponse(data);
+    try {
+      const data = await this.postLlm(url, headers, body);
+      return this.parseOpenAIResponse(data);
+    } catch (err) {
+      const msg = (err as Error).message || String(err);
+      // Если Gemini сообщает о недоступности устаревшей модели (1.5-flash или 2.5-flash)
+      if (isGemini && (msg.includes('is no longer available') || msg.includes('404') || msg.includes('not found')) && model !== 'gemini-3.6-flash') {
+        console.warn(`[Jarvis Gemini] Модель ${model} недоступна. Автоматический перезапрос с gemini-3.6-flash...`);
+        body.model = 'gemini-3.6-flash';
+        const retryData = await this.postLlm(url, headers, body);
+        return this.parseOpenAIResponse(retryData);
+      }
+      throw err;
+    }
   }
 
   private parseOpenAIResponse(data: { choices: Array<{ message: { content?: string; tool_calls?: Array<{ function: { name: string; arguments: string } }> } }> }): OrchestratorResult {
@@ -329,13 +341,13 @@ export class JarvisOrchestrator {
     const response = message.content ?? '';
     const actions: OrchestratorResult['actions'] = [];
 
-    if (message.tool_calls) {
-      for (const call of message.tool_calls) {
+    if (message.tool_calls && message.tool_calls.length > 0) {
+      for (const tc of message.tool_calls) {
         try {
-          const args = JSON.parse(call.function.arguments) as Record<string, unknown>;
-          actions.push({ toolName: call.function.name, args });
+          const args = JSON.parse(tc.function.arguments);
+          actions.push({ toolName: tc.function.name, args });
         } catch {
-          console.warn('[Orchestrator] Failed to parse tool call args:', call.function.arguments);
+          console.warn('[Jarvis] Failed to parse tool call arguments:', tc.function.arguments);
         }
       }
     }
@@ -388,15 +400,29 @@ export class JarvisOrchestrator {
         const rootUrl = baseUrl.replace(/\/v1$/, '');
         const url = `${rootUrl}/api/tags`;
 
+        let data: any;
         if (isTauri) {
           const { invoke } = await import('@tauri-apps/api/core');
-          await invoke('jarvis_llm_request', {
+          data = await invoke('jarvis_llm_request', {
             req: { url, method: 'GET', headers: {}, body: {} },
           });
-          return { available: true };
+        } else {
+          const response = await fetch(url, { signal: AbortSignal.timeout(4000) });
+          data = await response.json();
         }
-        const response = await fetch(url, { signal: AbortSignal.timeout(3000) });
-        return { available: response.ok };
+
+        const models: string[] = (data?.models || []).map((m: any) => m.name || m.model);
+        if (models.length === 0) {
+          return { available: true, error: 'Ollama запущен, но моделей нет (выполните: ollama pull llama3)' };
+        }
+
+        const currentModel = this.config.local.model?.trim() || 'llama3:latest';
+        const hasCurrent = models.some((m) => m === currentModel || m.startsWith(`${currentModel}:`));
+        if (!hasCurrent) {
+          this.config.local.model = models[0];
+          return { available: true, error: `Подключено к Ollama (модель: ${models[0]})` };
+        }
+        return { available: true, error: `Подключено к Ollama (${currentModel})` };
       }
 
       const p = providerProfile || this.getOrderedProviderChain()[0];
@@ -406,8 +432,8 @@ export class JarvisOrchestrator {
       if (baseUrl.endsWith('/')) baseUrl = baseUrl.slice(0, -1);
 
       const apiKey = p.apiKey.trim();
-      const isGemini = baseUrl.includes('generativelanguage.googleapis.com') || apiKey.startsWith('AIzaSy');
-      const model = p.model?.trim() || (isGemini ? 'gemini-1.5-flash' : 'gpt-4o-mini');
+      const isGemini = baseUrl.includes('generativelanguage.googleapis.com') || apiKey.startsWith('AIzaSy') || apiKey.startsWith('AQ.');
+      let model = p.model?.trim() || (isGemini ? 'gemini-3.6-flash' : 'gpt-4o-mini');
 
       const headers: Record<string, string> = {
         'Content-Type': 'application/json',
@@ -419,9 +445,9 @@ export class JarvisOrchestrator {
         headers['X-Title'] = 'SysForge Jarvis';
       }
 
-      // Отправляем легковесный проверочный запрос (1 токен), идентичный реальному чату
+      // Проверочный легковесный запрос
       const url = `${baseUrl}/chat/completions`;
-      const body = {
+      const body: Record<string, unknown> = {
         model,
         messages: [{ role: 'user', content: 'hi' }],
         max_tokens: 1,
@@ -429,10 +455,23 @@ export class JarvisOrchestrator {
 
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        await invoke('jarvis_llm_request', {
-          req: { url, method: 'POST', headers, body },
-        });
-        return { available: true };
+        try {
+          await invoke('jarvis_llm_request', {
+            req: { url, method: 'POST', headers, body },
+          });
+          return { available: true };
+        } catch (err) {
+          const msg = (err as Error).message || String(err);
+          if (isGemini && (msg.includes('is no longer available') || msg.includes('404') || msg.includes('not found')) && model !== 'gemini-3.6-flash') {
+            body.model = 'gemini-3.6-flash';
+            p.model = 'gemini-3.6-flash';
+            await invoke('jarvis_llm_request', {
+              req: { url, method: 'POST', headers, body },
+            });
+            return { available: true, error: '✓ Успешно (переключено на gemini-3.6-flash)' };
+          }
+          throw err;
+        }
       }
 
       const response = await fetch(url, {

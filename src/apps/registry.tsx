@@ -33,6 +33,13 @@ import RegexTester from './developer/RegexTester';
 import DiffViewer from './developer/DiffViewer';
 import APITester from './developer/APITester';
 import SnippetManager from './developer/SnippetManager';
+import RealTerminal from './developer/RealTerminal';
+
+// System — new Patch v5
+import StartupManager from './system/StartupManager';
+import DiskAnalyzer from './system/DiskAnalyzer';
+import DuplicateFinder from './system/DuplicateFinder';
+import FileExplorer from './system/FileExplorer';
 
 export const ModuleNotImplemented: React.FC = () => (
   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: 13 }}>
@@ -74,6 +81,13 @@ export const appRegistry: Record<string, ComponentType> = {
   'regex': RegexTester,
   'snippets': SnippetManager,
   'diff': DiffViewer,
+  'terminal': RealTerminal,
+
+  // System — Patch v5
+  'startup-manager': StartupManager,
+  'disk-analyzer': DiskAnalyzer,
+  'duplicate-finder': DuplicateFinder,
+  'file-explorer': FileExplorer,
 };
 
 export function getAppComponent(id: string): ComponentType {

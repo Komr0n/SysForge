@@ -114,7 +114,7 @@ export const DEFAULT_CLOUD_PROVIDERS: CloudProviderProfile[] = [
     enabled: true,
     apiKey: '',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
-    model: 'gemini-1.5-flash',
+    model: 'gemini-3.6-flash',
     description: 'Ultra-fast multimodal AI from Google with generous free tier',
   },
   {
@@ -168,11 +168,11 @@ export const DEFAULT_JARVIS_CONFIG: JarvisConfig = {
   provider: 'local',
   local: {
     ollamaUrl: 'http://localhost:11434/v1',
-    model: 'llama3.2',
+    model: 'llama3:latest',
   },
   cloud: {
     apiKey: '',
-    model: 'gemini-1.5-flash',
+    model: 'gemini-3.6-flash',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
   },
   cloudProviders: DEFAULT_CLOUD_PROVIDERS,

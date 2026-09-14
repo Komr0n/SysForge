@@ -314,6 +314,9 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
       ttsRate: jarvis.voice.ttsRate,
       ttsPitch: jarvis.voice.ttsPitch,
       sttEnabled: jarvis.voice.sttEnabled,
+      followUpListening: jarvis.voice.followUpListening,
+      followUpWindowMs: jarvis.voice.followUpWindowMs,
+      cloudProviders: jarvis.cloudProviders,
     });
 
     const removeStateListener = vs.onStateChange((state) => {
@@ -338,6 +341,10 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
       handleCommandRef.current(cmd, true);
     });
 
+    const removeErrorListener = vs.onError((msg: string) => {
+      addMessage('system', msg);
+    });
+
     if (jarvis.voice.continuousWakeWord) {
       vs.startWakeWordListening().catch(() => {});
     }
@@ -348,8 +355,9 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
       removeTranscriptListener();
       removeFollowUpListener();
       removeCommandListener();
+      removeErrorListener();
     };
-  }, [jarvis.voice]);
+  }, [jarvis.voice, jarvis.cloudProviders, addMessage]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

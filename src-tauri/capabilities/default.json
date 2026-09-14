@@ -5,6 +5,8 @@
   "permissions": [
     "core:default",
     "store:default",
+    "dialog:default",
+    "dialog:allow-open",
     "fs:allow-read",
     "fs:allow-write",
     {

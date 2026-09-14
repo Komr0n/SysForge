@@ -18,7 +18,6 @@ import { useWindowStore } from './store/windowStore';
 import { useSettingsStore } from './store/settingsStore';
 import { getVoiceService, JarvisState } from './lib/jarvis/voice-service';
 
-import GlobeWidget from './components/widgets/GlobeWidget';
 import { registerUICallbacks } from './lib/jarvis/tool-executor';
 import { getThresholdWatcher } from './lib/jarvis/threshold-watcher';
 const ClockWidget = lazy(() => import('./components/widgets/ClockWidget'));
@@ -30,6 +29,8 @@ const APP_ICONS: Record<string, string> = {
   processes: '⚙️', 'system-overview': '💾', logs: '📋', 'file-hash': '🔍', 'app-scheduler': '⏱️', 'net-processes': '🌐',
   'api-tester': '🧪', formatter: '{ }', encoder: '🔢', regex: '🔤',
   snippets: '📝', diff: '↔️',
+  // Patch v5
+  terminal: '⬛', 'startup-manager': '🚀', 'disk-analyzer': '💿', 'duplicate-finder': '🗂️', 'file-explorer': '🔎',
 };
 
 export default function App() {
@@ -149,22 +150,6 @@ export default function App() {
                 </Suspense>
               </DraggableWidget>
             </ErrorBoundary>
-          )}
-
-          {widgets.globe && (
-            <div style={{ position: 'absolute', inset: 0, zIndex: 1, pointerEvents: 'none', display: 'flex', alignItems: 'flex-end', justifyContent: 'flex-end' }}>
-              {/* pointer-events re-enabled inside the widget itself; the wrapper
-                  keeps the layer below windows (windows raise their z on focus) */}
-              <div style={{ pointerEvents: 'auto' }}>
-                <DraggableWidget id="globe" anchor="bottom-right" width={300} title="Globe">
-                  <ErrorBoundary>
-                    <Suspense fallback={<div style={{ width: 300, height: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', fontFamily: 'var(--font-mono)', fontSize: 10, color: '#64748b' }}>LOADING GLOBE…</div>}>
-                      <GlobeWidget />
-                    </Suspense>
-                  </ErrorBoundary>
-                </DraggableWidget>
-              </div>
-            </div>
           )}
 
           {/* Windows layer */}

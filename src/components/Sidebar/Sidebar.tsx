@@ -27,6 +27,10 @@ import { Clock,
   Regex,
   Bookmark,
   GitCompare,
+  HardDrive,
+  Copy,
+  FolderSearch,
+  Power,
 } from 'lucide-react';
 import { useWindowStore } from '../../store/windowStore';
 
@@ -68,6 +72,10 @@ const apps: AppItem[] = [
   { id: 'logs', title: 'Log Analyzer', icon: <ScrollText size={16} />, category: 'system' },
   { id: 'file-hash', title: 'File Hash Check', icon: <CheckSquare size={16} />, category: 'system' },
   { id: 'app-scheduler', title: 'App Scheduler', icon: <Clock size={16} />, category: 'system' },
+  { id: 'startup-manager', title: 'Startup Manager', icon: <Power size={16} />, category: 'system' },
+  { id: 'disk-analyzer', title: 'Disk Analyzer', icon: <HardDrive size={16} />, category: 'system' },
+  { id: 'duplicate-finder', title: 'Duplicate Finder', icon: <Copy size={16} />, category: 'system' },
+  { id: 'file-explorer', title: 'File Explorer', icon: <FolderSearch size={16} />, category: 'system' },
   // Developer
   { id: 'api-tester', title: 'API Tester', icon: <Beaker size={16} />, category: 'developer' },
   { id: 'formatter', title: 'Data Formatter', icon: <Braces size={16} />, category: 'developer' },
@@ -75,6 +83,7 @@ const apps: AppItem[] = [
   { id: 'regex', title: 'Regex Tester', icon: <Regex size={16} />, category: 'developer' },
   { id: 'snippets', title: 'Snippet Manager', icon: <Bookmark size={16} />, category: 'developer' },
   { id: 'diff', title: 'Diff Viewer', icon: <GitCompare size={16} />, category: 'developer' },
+  { id: 'terminal', title: 'PTY Terminal', icon: <Terminal size={16} />, category: 'developer' },
 ];
 
 export default function Sidebar() {

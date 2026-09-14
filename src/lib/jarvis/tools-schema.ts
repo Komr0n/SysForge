@@ -40,6 +40,7 @@ export const JARVIS_TOOLS: JarvisTool[] = [
             'processes', 'system-overview', 'logs', 'file-hash',
             'api-tester', 'formatter', 'encoder', 'regex', 'snippets', 'diff',
             'app-scheduler', 'net-processes',
+            'terminal', 'startup-manager', 'disk-analyzer', 'duplicate-finder', 'file-explorer',
           ],
         },
       },

@@ -4,17 +4,22 @@ pub mod voice;
 use jarvis::intent::{embed_text, match_intent, IntentMatch, PhraseRegistry, SlotSchema};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::io::{Read, Write};
+use std::sync::{Mutex, RwLock};
 use std::time::{Duration, Instant};
 use sysinfo::{Disks, Networks, Signal, System};
 use tauri::{Emitter, Manager, State};
 use tokio::time::timeout;
+// Part A: AES-GCM encryption
+use aes_gcm::aead::{Aead, KeyInit};
+use aes_gcm::{Aes256Gcm, Key, Nonce};
+use sha2::{Digest, Sha256};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Data structures
 // ─────────────────────────────────────────────────────────────────────────────
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct SystemInfo {
     pub cpu_name: String,
     pub cpu_cores: usize,
@@ -32,7 +37,7 @@ pub struct SystemInfo {
     pub network_interfaces: Vec<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct DiskInfo {
     pub name: String,
     pub mount: String,
@@ -111,6 +116,111 @@ pub struct AppState {
     pub prev_network: Mutex<PrevNetworkSnapshot>,
     pub jarvis_registry: Mutex<PhraseRegistry>,
     pub prev_process_network: Mutex<PrevProcessNetwork>,
+}
+
+// ─── Part M: Single-source system snapshot ────────────────────────────────────
+
+pub struct SystemSnapshotState {
+    pub latest: RwLock<SystemInfo>,
+}
+
+impl SystemSnapshotState {
+    fn default_snapshot() -> SystemInfo {
+        SystemInfo {
+            cpu_name: String::new(),
+            cpu_cores: 0,
+            cpu_usage: 0.0,
+            cpus_usage: vec![],
+            total_memory_bytes: 0,
+            used_memory_bytes: 0,
+            total_swap_bytes: 0,
+            used_swap_bytes: 0,
+            os_name: String::new(),
+            os_version: String::new(),
+            hostname: String::new(),
+            uptime: 0,
+            disks: vec![],
+            network_interfaces: vec![],
+        }
+    }
+}
+
+// ─── Part L: PTY Terminal state ───────────────────────────────────────────────
+
+struct PtySession {
+    writer: Box<dyn Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+}
+
+pub struct TerminalState {
+    sessions: Mutex<HashMap<String, PtySession>>,
+}
+
+// ─── Part A: Encryption helpers ───────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn get_machine_guid() -> Option<String> {
+    use winreg::enums::*;
+    use winreg::RegKey;
+    RegKey::predef(HKEY_LOCAL_MACHINE)
+        .open_subkey(r"SOFTWARE\Microsoft\Cryptography")
+        .ok()?
+        .get_value::<String, _>("MachineGuid")
+        .ok()
+}
+
+#[cfg(not(target_os = "windows"))]
+fn get_machine_guid() -> Option<String> {
+    None
+}
+
+fn derive_key() -> [u8; 32] {
+    let machine_id = get_machine_guid().unwrap_or_else(|| "sysforge-fallback-salt".into());
+    let mut hasher = Sha256::new();
+    hasher.update(machine_id.as_bytes());
+    hasher.update(b"sysforge-jarvis-v1");
+    hasher.finalize().into()
+}
+
+// ─── Part N: Disk Analyzer structs ───────────────────────────────────────────
+
+#[derive(Serialize)]
+struct DirNode {
+    name: String,
+    path: String,
+    size: u64,
+    is_dir: bool,
+    children_scanned: bool,
+}
+
+// ─── Part O: Duplicate Finder structs ────────────────────────────────────────
+
+#[derive(Serialize)]
+struct DuplicateGroup {
+    hash: String,
+    size: u64,
+    paths: Vec<String>,
+}
+
+// ─── Part P: Startup Manager structs ─────────────────────────────────────────
+
+#[derive(Serialize)]
+struct StartupEntry {
+    name: String,
+    command: String,
+    location: String,
+    enabled: bool,
+}
+
+// ─── Part K: File Explorer structs ───────────────────────────────────────────
+
+#[derive(Serialize, Clone)]
+struct FileEntry {
+    name: String,
+    path: String,
+    size: u64,
+    is_dir: bool,
+    extension: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -195,48 +305,54 @@ impl CommandExt for std::process::Command {
 // ─────────────────────────────────────────────────────────────────────────────
 
 #[tauri::command]
-fn get_system_info(state: State<AppState>) -> SystemInfo {
-    let mut sys = state.system.lock().unwrap();
-    sys.refresh_cpu_usage();
-    sys.refresh_memory();
+fn get_system_info(snapshot: State<SystemSnapshotState>) -> SystemInfo {
+    snapshot.latest.read().unwrap().clone()
+}
 
-    let cpu_name = sys
-        .cpus()
-        .first()
-        .map(|c| c.brand().to_string())
-        .unwrap_or_else(|| "CPU".to_string());
-    let cpu_usage = sys.global_cpu_info().cpu_usage();
-    let cpus_usage: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-
-    let disks = Disks::new_with_refreshed_list();
-    let disk_info: Vec<DiskInfo> = disks
-        .iter()
-        .map(|d| DiskInfo {
-            name: d.name().to_string_lossy().to_string(),
-            mount: d.mount_point().to_string_lossy().to_string(),
-            total_bytes: d.total_space(),
-            used_bytes: d.total_space().saturating_sub(d.available_space()),
-        })
-        .collect();
-
-    let net = state.networks.lock().unwrap();
-    let net_interfaces: Vec<String> = net.iter().map(|(name, _)| name.clone()).collect();
-
-    SystemInfo {
-        cpu_name,
-        cpu_cores: sys.cpus().len(),
-        cpu_usage,
-        cpus_usage,
-        total_memory_bytes: sys.total_memory(),
-        used_memory_bytes: sys.used_memory(),
-        total_swap_bytes: sys.total_swap(),
-        used_swap_bytes: sys.used_swap(),
-        os_name: System::name().unwrap_or_default(),
-        os_version: System::os_version().unwrap_or_default(),
-        hostname: System::host_name().unwrap_or_default(),
-        uptime: System::uptime(),
-        disks: disk_info,
-        network_interfaces: net_interfaces,
+async fn background_system_refresh_loop(app: tauri::AppHandle) {
+    let mut sys = System::new_all();
+    loop {
+        sys.refresh_cpu_usage();
+        sys.refresh_memory();
+        let disks = Disks::new_with_refreshed_list();
+        let disk_info: Vec<DiskInfo> = disks
+            .iter()
+            .map(|d| DiskInfo {
+                name: d.name().to_string_lossy().to_string(),
+                mount: d.mount_point().to_string_lossy().to_string(),
+                total_bytes: d.total_space(),
+                used_bytes: d.total_space().saturating_sub(d.available_space()),
+            })
+            .collect();
+        let cpu_name = sys
+            .cpus()
+            .first()
+            .map(|c| c.brand().to_string())
+            .unwrap_or_else(|| "CPU".to_string());
+        let net_interfaces: Vec<String> = Networks::new_with_refreshed_list()
+            .iter()
+            .map(|(n, _)| n.clone())
+            .collect();
+        let snapshot = SystemInfo {
+            cpu_name,
+            cpu_cores: sys.cpus().len(),
+            cpu_usage: sys.global_cpu_info().cpu_usage(),
+            cpus_usage: sys.cpus().iter().map(|c| c.cpu_usage()).collect(),
+            total_memory_bytes: sys.total_memory(),
+            used_memory_bytes: sys.used_memory(),
+            total_swap_bytes: sys.total_swap(),
+            used_swap_bytes: sys.used_swap(),
+            os_name: System::name().unwrap_or_default(),
+            os_version: System::os_version().unwrap_or_default(),
+            hostname: System::host_name().unwrap_or_default(),
+            uptime: System::uptime(),
+            disks: disk_info,
+            network_interfaces: net_interfaces,
+        };
+        if let Ok(state) = app.try_state::<SystemSnapshotState>().ok_or(()) {
+            *state.latest.write().unwrap() = snapshot;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
     }
 }
 
@@ -1075,10 +1191,39 @@ mod win_net {
         pub soft_error_reason: u32,
     }
 
+    pub const UDP_TABLE_OWNER_PID: i32 = 1;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct MIB_UDPROW_OWNER_PID {
+        pub dw_local_addr: u32,
+        pub dw_local_port: u32,
+        pub dw_owning_pid: u32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    #[allow(dead_code)]
+    pub struct MIB_UDP6ROW_OWNER_PID {
+        pub uc_local_addr: [u8; 16],
+        pub dw_local_scope_id: u32,
+        pub dw_local_port: u32,
+        pub dw_owning_pid: u32,
+    }
+
     #[link(name = "iphlpapi")]
     extern "system" {
         pub fn GetExtendedTcpTable(
             p_tcp_table: *mut c_void,
+            pdw_size: *mut u32,
+            b_order: i32,
+            ul_af: u32,
+            table_class: i32,
+            reserved: u32,
+        ) -> u32;
+
+        pub fn GetExtendedUdpTable(
+            p_udp_table: *mut c_void,
             pdw_size: *mut u32,
             b_order: i32,
             ul_af: u32,
@@ -1295,8 +1440,58 @@ async fn get_network_connections_by_process(
             }
         }
 
+        // 3. IPv4 UDP Endpoints (captures QUIC / HTTP3 Chrome traffic)
+        let mut size_udp4 = 0u32;
+        unsafe {
+            win_net::GetExtendedUdpTable(
+                std::ptr::null_mut(),
+                &mut size_udp4,
+                1,
+                win_net::AF_INET,
+                win_net::UDP_TABLE_OWNER_PID,
+                0,
+            );
+        }
+        if size_udp4 > 0 {
+            let mut buf_udp4 = vec![0u8; size_udp4 as usize];
+            let ret = unsafe {
+                win_net::GetExtendedUdpTable(
+                    buf_udp4.as_mut_ptr() as *mut std::ffi::c_void,
+                    &mut size_udp4,
+                    1,
+                    win_net::AF_INET,
+                    win_net::UDP_TABLE_OWNER_PID,
+                    0,
+                )
+            };
+            if ret == 0 && buf_udp4.len() >= std::mem::size_of::<u32>() {
+                let num_entries = unsafe { *(buf_udp4.as_ptr() as *const u32) };
+                let row_size = std::mem::size_of::<win_net::MIB_UDPROW_OWNER_PID>();
+                let rows_ptr = unsafe {
+                    buf_udp4
+                        .as_ptr()
+                        .add(std::mem::size_of::<u32>()) as *const win_net::MIB_UDPROW_OWNER_PID
+                };
+                for i in 0..num_entries as usize {
+                    if (i + 1) * row_size + std::mem::size_of::<u32>() <= buf_udp4.len() {
+                        let row = unsafe { *rows_ptr.add(i) };
+                        let pid = row.dw_owning_pid;
+                        let entry = pid_map.entry(pid).or_insert((0, 0, Vec::new()));
+                        entry.0 += 1;
+                        if row.dw_local_port != 0 && entry.2.len() < 5 {
+                            let port = u16::from_be((row.dw_local_port & 0xffff) as u16);
+                            let ep = format!("UDP:{}", port);
+                            if !entry.2.contains(&ep) {
+                                entry.2.push(ep);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut sys = state.system.lock().unwrap();
-        sys.refresh_processes();
+        sys.refresh_processes_specifics(sysinfo::ProcessRefreshKind::everything());
 
         let mut prev_net = state.prev_process_network.lock().unwrap();
         let now = Instant::now();
@@ -1328,7 +1523,10 @@ async fn get_network_connections_by_process(
                 };
                 new_net_map.insert(pid, (current_in, current_out));
 
-                let (rx_rate, tx_rate) = if let Some(&(prev_in, prev_out)) = prev_net.entries.get(&pid) {
+                let du_read = proc_handle.map(|p| p.disk_usage().read_bytes).unwrap_or(0);
+                let du_write = proc_handle.map(|p| p.disk_usage().written_bytes).unwrap_or(0);
+
+                let (mut rx_rate, mut tx_rate) = if let Some(&(prev_in, prev_out)) = prev_net.entries.get(&pid) {
                     let dr = current_in.saturating_sub(prev_in);
                     let dw = current_out.saturating_sub(prev_out);
                     (
@@ -1338,6 +1536,13 @@ async fn get_network_connections_by_process(
                 } else {
                     (0, 0)
                 };
+
+                if rx_rate == 0 && du_read > 0 {
+                    rx_rate = (du_read as f64 / elapsed).round() as u64;
+                }
+                if tx_rate == 0 && du_write > 0 {
+                    tx_rate = (du_write as f64 / elapsed).round() as u64;
+                }
 
                 ProcessConnectionInfo {
                     pid,
@@ -1427,6 +1632,387 @@ fn parse_tracert_args<'a>(args: &'a [&'a str]) -> (Option<u32>, bool, Option<&'a
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Part A — API Key Encryption Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn encrypt_secret(plaintext: String) -> Result<String, String> {
+    use base64::Engine;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derive_key()));
+    let nonce_bytes: [u8; 12] = rand::random();
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce_bytes), plaintext.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut combined = nonce_bytes.to_vec();
+    combined.extend(ciphertext);
+    Ok(base64::engine::general_purpose::STANDARD.encode(combined))
+}
+
+#[tauri::command]
+fn decrypt_secret(ciphertext_b64: Option<String>, ciphertext: Option<String>) -> Result<String, String> {
+    use base64::Engine;
+    let raw = ciphertext_b64
+        .or(ciphertext)
+        .ok_or_else(|| "Missing ciphertext".to_string())?;
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&derive_key()));
+    let combined = base64::engine::general_purpose::STANDARD
+        .decode(&raw)
+        .map_err(|e| e.to_string())?;
+    if combined.len() < 12 {
+        return Err("Invalid encrypted data".into());
+    }
+    let (nonce_bytes, ciphertext_slice) = combined.split_at(12);
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(nonce_bytes), ciphertext_slice)
+        .map_err(|e| e.to_string())?;
+    String::from_utf8(plaintext).map_err(|e| e.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part L — PTY Terminal Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+fn create_terminal_session(
+    app: tauri::AppHandle,
+    state: State<TerminalState>,
+    session_id: String,
+) -> Result<(), String> {
+    use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+    let pty_system = native_pty_system();
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: 30,
+            cols: 120,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())?;
+
+    let mut cmd = CommandBuilder::new("powershell.exe");
+    cmd.cwd(dirs::home_dir().unwrap_or_default());
+    pair.slave
+        .spawn_command(cmd)
+        .map_err(|e| e.to_string())?;
+
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+
+    let app_clone = app.clone();
+    let sid = session_id.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let _ = app_clone.emit(
+                        &format!("terminal:output:{}", sid),
+                        String::from_utf8_lossy(&buf[..n]).to_string(),
+                    );
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    state.sessions.lock().unwrap().insert(
+        session_id,
+        PtySession {
+            writer,
+            master: pair.master,
+        },
+    );
+    Ok(())
+}
+
+#[tauri::command]
+fn write_to_terminal(
+    state: State<TerminalState>,
+    session_id: String,
+    data: String,
+) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    sessions
+        .get_mut(&session_id)
+        .ok_or("Session not found".to_string())?
+        .writer
+        .write_all(data.as_bytes())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn resize_terminal(
+    state: State<TerminalState>,
+    session_id: String,
+    rows: u16,
+    cols: u16,
+) -> Result<(), String> {
+    use portable_pty::PtySize;
+    let sessions = state.sessions.lock().unwrap();
+    sessions
+        .get(&session_id)
+        .ok_or("Session not found".to_string())?
+        .master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| e.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part N — Disk Analyzer Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+fn dir_size_shallow_estimate(path: &std::path::Path) -> u64 {
+    std::fs::read_dir(path)
+        .ok()
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| if m.is_file() { m.len() } else { 4096 })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+async fn scan_directory_sizes(path: String) -> Result<Vec<DirNode>, String> {
+    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+    let mut nodes = Vec::new();
+    for entry in entries.flatten() {
+        let meta = entry.metadata().map_err(|e| e.to_string())?;
+        let size = if meta.is_dir() {
+            dir_size_shallow_estimate(&entry.path())
+        } else {
+            meta.len()
+        };
+        nodes.push(DirNode {
+            name: entry.file_name().to_string_lossy().to_string(),
+            path: entry.path().to_string_lossy().to_string(),
+            size,
+            is_dir: meta.is_dir(),
+            children_scanned: false,
+        });
+    }
+    nodes.sort_by(|a, b| b.size.cmp(&a.size));
+    Ok(nodes)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part O — Duplicate File Finder Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn find_duplicate_files(root: String) -> Result<Vec<DuplicateGroup>, String> {
+    use std::collections::HashMap;
+    use walkdir::WalkDir;
+    let mut by_size: HashMap<u64, Vec<std::path::PathBuf>> = HashMap::new();
+    for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() && meta.len() > 0 {
+                by_size.entry(meta.len()).or_default().push(entry.into_path());
+            }
+        }
+    }
+    let mut groups = Vec::new();
+    for (size, paths) in by_size.into_iter().filter(|(_, p)| p.len() > 1) {
+        let mut by_hash: HashMap<String, Vec<String>> = HashMap::new();
+        for path in paths {
+            if let Ok(bytes) = std::fs::read(&path) {
+                let hash = blake3::hash(&bytes).to_hex().to_string();
+                by_hash
+                    .entry(hash)
+                    .or_default()
+                    .push(path.to_string_lossy().to_string());
+            }
+        }
+        for (hash, group_paths) in by_hash {
+            if group_paths.len() > 1 {
+                groups.push(DuplicateGroup {
+                    hash,
+                    size,
+                    paths: group_paths,
+                });
+            }
+        }
+    }
+    groups.sort_by(|a, b| {
+        (b.size * b.paths.len() as u64).cmp(&(a.size * a.paths.len() as u64))
+    });
+    Ok(groups)
+}
+
+#[tauri::command]
+async fn delete_file(path: String) -> Result<(), String> {
+    std::fs::remove_file(&path).map_err(|e| e.to_string())
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part P — Startup Manager Commands
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn is_startup_enabled(hive: winreg::HKEY, name: &str) -> bool {
+    use winreg::RegKey;
+    RegKey::predef(hive)
+        .open_subkey(
+            r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+        )
+        .and_then(|k| k.get_raw_value(name))
+        .map(|v| v.bytes.first().copied().unwrap_or(2) != 3)
+        .unwrap_or(true)
+}
+
+#[tauri::command]
+fn list_startup_entries() -> Result<Vec<StartupEntry>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+        let mut entries = Vec::new();
+        for (hive, hive_name) in [(HKEY_CURRENT_USER, "HKCU"), (HKEY_LOCAL_MACHINE, "HKLM")] {
+            if let Ok(run_key) = RegKey::predef(hive).open_subkey(
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run",
+            ) {
+                for (val_name, val) in run_key.enum_values().flatten() {
+                    let enabled = is_startup_enabled(hive, &val_name);
+                    entries.push(StartupEntry {
+                        name: val_name,
+                        command: val.to_string(),
+                        location: hive_name.into(),
+                        enabled,
+                    });
+                }
+            }
+        }
+        Ok(entries)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(vec![])
+    }
+}
+
+#[tauri::command]
+fn toggle_startup_entry(
+    hive_name: String,
+    name: String,
+    enable: bool,
+) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::*;
+        use winreg::{RegKey, RegValue};
+        let hive = if hive_name == "HKLM" {
+            HKEY_LOCAL_MACHINE
+        } else {
+            HKEY_CURRENT_USER
+        };
+        let key = RegKey::predef(hive)
+            .open_subkey_with_flags(
+                r"SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
+                KEY_SET_VALUE,
+            )
+            .map_err(|e| e.to_string())?;
+        let flag: u8 = if enable { 0x02 } else { 0x03 };
+        let data = vec![flag, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        key.set_raw_value(
+            &name,
+            &RegValue {
+                bytes: data,
+                vtype: REG_BINARY,
+            },
+        )
+        .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (hive_name, name, enable);
+        Err("Startup manager is Windows-only".into())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Part K — File Name Search (walkdir fallback)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn search_files_by_name(
+    query: String,
+    root: String,
+    extension_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<FileEntry>, String> {
+    use walkdir::WalkDir;
+    let q = query.to_lowercase();
+    let max = limit.unwrap_or(200);
+    let results: Vec<FileEntry> = WalkDir::new(&root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            name.contains(&q)
+        })
+        .filter(|e| {
+            if let Some(ref ext_filter) = extension_filter {
+                e.path()
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.eq_ignore_ascii_case(ext_filter))
+                    .unwrap_or(false)
+            } else {
+                true
+            }
+        })
+        .take(max)
+        .map(|e| {
+            let meta = e.metadata();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+            let extension = e
+                .path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("")
+                .to_lowercase();
+            FileEntry {
+                name: e.file_name().to_string_lossy().to_string(),
+                path: e.path().to_string_lossy().to_string(),
+                size,
+                is_dir,
+                extension,
+            }
+        })
+        .collect();
+    Ok(results)
+}
+
+#[tauri::command]
+async fn open_path_in_explorer(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // App entry point
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1493,6 +2079,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             system: Mutex::new(System::new()),
             networks: Mutex::new(net),
@@ -1506,8 +2093,21 @@ pub fn run() {
                 entries: HashMap::new(),
             }),
         })
+        .manage(SystemSnapshotState {
+            latest: RwLock::new(SystemSnapshotState::default_snapshot()),
+        })
         .manage(SchedulerState {
             timers: Mutex::new(HashMap::new()),
+        })
+        .manage(TerminalState {
+            sessions: Mutex::new(HashMap::new()),
+        })
+        .setup(|app| {
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                background_system_refresh_loop(handle).await;
+            });
+            Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_system_info,
@@ -1536,6 +2136,24 @@ pub fn run() {
             cancel_scheduled_close,
             set_tray_icon,
             get_network_connections_by_process,
+            // Part A: Encryption
+            encrypt_secret,
+            decrypt_secret,
+            // Part L: PTY Terminal
+            create_terminal_session,
+            write_to_terminal,
+            resize_terminal,
+            // Part N: Disk Analyzer
+            scan_directory_sizes,
+            // Part O: Duplicate Finder
+            find_duplicate_files,
+            delete_file,
+            // Part P: Startup Manager
+            list_startup_entries,
+            toggle_startup_entry,
+            // Part K: File Explorer
+            search_files_by_name,
+            open_path_in_explorer,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
