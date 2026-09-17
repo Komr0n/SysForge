@@ -1941,8 +1941,18 @@ fn toggle_startup_entry(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Part K — File Name Search (walkdir fallback)
+// Part K — File Name & Content Search (Поисковик)
 // ─────────────────────────────────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ContentSearchMatch {
+    pub path: String,
+    pub filename: String,
+    pub extension: String,
+    pub size: u64,
+    pub line_number: usize,
+    pub snippet: String,
+}
 
 #[tauri::command]
 async fn search_files_by_name(
@@ -1951,48 +1961,362 @@ async fn search_files_by_name(
     extension_filter: Option<String>,
     limit: Option<usize>,
 ) -> Result<Vec<FileEntry>, String> {
-    use walkdir::WalkDir;
-    let q = query.to_lowercase();
-    let max = limit.unwrap_or(200);
-    let results: Vec<FileEntry> = WalkDir::new(&root)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            name.contains(&q)
-        })
-        .filter(|e| {
-            if let Some(ref ext_filter) = extension_filter {
-                e.path()
+    tokio::task::spawn_blocking(move || {
+        use walkdir::WalkDir;
+        let q = query.to_lowercase();
+        let max = limit.unwrap_or(250);
+        let results: Vec<FileEntry> = WalkDir::new(&root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name().to_string_lossy().to_lowercase();
+                name.contains(&q)
+            })
+            .filter(|e| {
+                if let Some(ref ext_filter) = extension_filter {
+                    e.path()
+                        .extension()
+                        .and_then(|x| x.to_str())
+                        .map(|x| x.eq_ignore_ascii_case(ext_filter))
+                        .unwrap_or(false)
+                } else {
+                    true
+                }
+            })
+            .take(max)
+            .map(|e| {
+                let meta = e.metadata();
+                let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+                let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+                let extension = e
+                    .path()
                     .extension()
                     .and_then(|x| x.to_str())
-                    .map(|x| x.eq_ignore_ascii_case(ext_filter))
-                    .unwrap_or(false)
+                    .unwrap_or("")
+                    .to_lowercase();
+                FileEntry {
+                    name: e.file_name().to_string_lossy().to_string(),
+                    path: e.path().to_string_lossy().to_string(),
+                    size,
+                    is_dir,
+                    extension,
+                }
+            })
+            .collect();
+        Ok(results)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ─── Document & Office Text Extractors (PDF, DOCX, XLSX, PPTX, ODT) ──────────
+
+fn strip_xml_to_text(xml: &str, paragraph_tag: &str) -> String {
+    let mut out = String::with_capacity(xml.len() / 2);
+    let mut in_tag = false;
+    let mut current_tag = String::new();
+
+    for c in xml.chars() {
+        if c == '<' {
+            in_tag = true;
+            current_tag.clear();
+        } else if c == '>' {
+            in_tag = false;
+            let tag_lower = current_tag.to_lowercase();
+            if tag_lower.starts_with(paragraph_tag)
+                || tag_lower.starts_with(&format!("/{}", paragraph_tag))
+                || tag_lower.contains("br")
+                || tag_lower.starts_with("w:tab")
+            {
+                out.push('\n');
             } else {
-                true
+                out.push(' ');
             }
-        })
-        .take(max)
-        .map(|e| {
-            let meta = e.metadata();
-            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-            let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-            let extension = e
-                .path()
+        } else if in_tag {
+            current_tag.push(c);
+        } else {
+            out.push(c);
+        }
+    }
+
+    out.replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&#39;", "'")
+}
+
+fn extract_text_from_docx(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut full_text = String::new();
+
+    if let Ok(mut item) = archive.by_name("word/document.xml") {
+        let mut content = String::new();
+        use std::io::Read;
+        if item.read_to_string(&mut content).is_ok() {
+            full_text.push_str(&strip_xml_to_text(&content, "w:p"));
+        }
+    }
+
+    if let Ok(mut item) = archive.by_name("word/footnotes.xml") {
+        let mut content = String::new();
+        use std::io::Read;
+        if item.read_to_string(&mut content).is_ok() {
+            full_text.push('\n');
+            full_text.push_str(&strip_xml_to_text(&content, "w:p"));
+        }
+    }
+
+    if full_text.trim().is_empty() {
+        None
+    } else {
+        Some(full_text)
+    }
+}
+
+fn extract_text_from_xlsx(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut full_text = String::new();
+
+    // Excel sharedStrings.xml holds text strings
+    if let Ok(mut item) = archive.by_name("xl/sharedStrings.xml") {
+        let mut content = String::new();
+        use std::io::Read;
+        if item.read_to_string(&mut content).is_ok() {
+            full_text.push_str(&strip_xml_to_text(&content, "si"));
+        }
+    }
+
+    // Worksheets
+    let mut sheet_names = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(f) = archive.by_index(i) {
+            let name = f.name().to_string();
+            if name.starts_with("xl/worksheets/sheet") && name.ends_with(".xml") {
+                sheet_names.push(name);
+            }
+        }
+    }
+    for sheet_name in sheet_names {
+        if let Ok(mut sheet_file) = archive.by_name(&sheet_name) {
+            let mut content = String::new();
+            use std::io::Read;
+            if sheet_file.read_to_string(&mut content).is_ok() {
+                full_text.push('\n');
+                full_text.push_str(&strip_xml_to_text(&content, "row"));
+            }
+        }
+    }
+
+    if full_text.trim().is_empty() {
+        None
+    } else {
+        Some(full_text)
+    }
+}
+
+fn extract_text_from_pptx(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    let mut full_text = String::new();
+
+    let mut slide_names = Vec::new();
+    for i in 0..archive.len() {
+        if let Ok(f) = archive.by_index(i) {
+            let name = f.name().to_string();
+            if name.starts_with("ppt/slides/slide") && name.ends_with(".xml") {
+                slide_names.push(name);
+            }
+        }
+    }
+    slide_names.sort();
+
+    for slide_name in slide_names {
+        if let Ok(mut slide_file) = archive.by_name(&slide_name) {
+            let mut content = String::new();
+            use std::io::Read;
+            if slide_file.read_to_string(&mut content).is_ok() {
+                full_text.push('\n');
+                full_text.push_str(&strip_xml_to_text(&content, "a:p"));
+            }
+        }
+    }
+
+    if full_text.trim().is_empty() {
+        None
+    } else {
+        Some(full_text)
+    }
+}
+
+fn extract_text_from_opendocument(path: &std::path::Path) -> Option<String> {
+    let file = std::fs::File::open(path).ok()?;
+    let mut archive = zip::ZipArchive::new(file).ok()?;
+    if let Ok(mut item) = archive.by_name("content.xml") {
+        let mut content = String::new();
+        use std::io::Read;
+        if item.read_to_string(&mut content).is_ok() {
+            let res = strip_xml_to_text(&content, "text:p");
+            if !res.trim().is_empty() {
+                return Some(res);
+            }
+        }
+    }
+    None
+}
+
+fn extract_text_from_pdf(path: &std::path::Path) -> Option<String> {
+    pdf_extract::extract_text(path).ok()
+}
+
+#[tauri::command]
+async fn search_files_by_content(
+    query: String,
+    root: String,
+    extension_filter: Option<String>,
+    limit: Option<usize>,
+) -> Result<Vec<ContentSearchMatch>, String> {
+    let q = query.to_lowercase();
+    let max = limit.unwrap_or(120);
+
+    tokio::task::spawn_blocking(move || {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+        use walkdir::WalkDir;
+
+        let mut matches = Vec::new();
+        let text_extensions = [
+            "txt", "md", "log", "json", "csv", "xml", "yaml", "yml", "ts", "tsx", "js", "jsx",
+            "py", "rs", "html", "css", "scss", "sql", "sh", "bat", "ps1", "ini", "conf", "env",
+            "toml", "c", "cpp", "h", "java", "cs",
+        ];
+        let doc_extensions = ["pdf", "docx", "xlsx", "pptx", "odt", "ods", "odp"];
+
+        for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+            if matches.len() >= max {
+                break;
+            }
+
+            if !entry.file_type().is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let path_str = path.to_string_lossy();
+            if path_str.contains(".git")
+                || path_str.contains("node_modules")
+                || path_str.contains("target")
+            {
+                continue;
+            }
+
+            let ext = path
                 .extension()
                 .and_then(|x| x.to_str())
                 .unwrap_or("")
                 .to_lowercase();
-            FileEntry {
-                name: e.file_name().to_string_lossy().to_string(),
-                path: e.path().to_string_lossy().to_string(),
-                size,
-                is_dir,
-                extension,
+
+            let is_text = text_extensions.contains(&ext.as_str());
+            let is_doc = doc_extensions.contains(&ext.as_str());
+
+            if let Some(ref filter) = extension_filter {
+                if !ext.eq_ignore_ascii_case(filter) {
+                    continue;
+                }
+            } else if !is_text && !is_doc {
+                continue;
             }
-        })
-        .collect();
-    Ok(results)
+
+            if let Ok(meta) = entry.metadata() {
+                let size = meta.len();
+                if size == 0 {
+                    continue;
+                }
+
+                // Office & PDF processing
+                if is_doc {
+                    if size > 25 * 1024 * 1024 {
+                        continue;
+                    }
+                    let text_opt = match ext.as_str() {
+                        "pdf" => extract_text_from_pdf(path),
+                        "docx" => extract_text_from_docx(path),
+                        "xlsx" => extract_text_from_xlsx(path),
+                        "pptx" => extract_text_from_pptx(path),
+                        "odt" | "ods" | "odp" => extract_text_from_opendocument(path),
+                        _ => None,
+                    };
+
+                    if let Some(text) = text_opt {
+                        for (idx, line) in text.lines().enumerate() {
+                            if matches.len() >= max {
+                                break;
+                            }
+                            if line.to_lowercase().contains(&q) {
+                                let trimmed = line.trim();
+                                if trimmed.is_empty() {
+                                    continue;
+                                }
+                                let snippet = if trimmed.len() > 180 {
+                                    format!("{}...", &trimmed[..180])
+                                } else {
+                                    trimmed.to_string()
+                                };
+                                matches.push(ContentSearchMatch {
+                                    path: path_str.to_string(),
+                                    filename: entry.file_name().to_string_lossy().to_string(),
+                                    extension: ext.clone(),
+                                    size,
+                                    line_number: idx + 1,
+                                    snippet,
+                                });
+                                break;
+                            }
+                        }
+                    }
+                } else if is_text {
+                    // Plain text & source code files (up to 8 MB)
+                    if size > 8 * 1024 * 1024 {
+                        continue;
+                    }
+
+                    if let Ok(file) = File::open(path) {
+                        let reader = BufReader::new(file);
+                        for (idx, line_res) in reader.lines().enumerate() {
+                            if matches.len() >= max {
+                                break;
+                            }
+                            if let Ok(line) = line_res {
+                                if line.to_lowercase().contains(&q) {
+                                    let trimmed = line.trim();
+                                    let snippet = if trimmed.len() > 180 {
+                                        format!("{}...", &trimmed[..180])
+                                    } else {
+                                        trimmed.to_string()
+                                    };
+                                    matches.push(ContentSearchMatch {
+                                        path: path_str.to_string(),
+                                        filename: entry.file_name().to_string_lossy().to_string(),
+                                        extension: ext.clone(),
+                                        size,
+                                        line_number: idx + 1,
+                                        snippet,
+                                    });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(matches)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -2001,6 +2325,25 @@ async fn open_path_in_explorer(path: String) -> Result<(), String> {
     {
         std::process::Command::new("explorer")
             .args(["/select,", &path])
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+async fn open_file_externally(path: String) -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        std::process::Command::new("cmd")
+            .args(["/c", "start", "", &path])
+            .creation_flags(0x08000000)
             .spawn()
             .map(|_| ())
             .map_err(|e| e.to_string())
@@ -2151,9 +2494,11 @@ pub fn run() {
             // Part P: Startup Manager
             list_startup_entries,
             toggle_startup_entry,
-            // Part K: File Explorer
+            // Part K: File Explorer / Search Engine
             search_files_by_name,
+            search_files_by_content,
             open_path_in_explorer,
+            open_file_externally,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

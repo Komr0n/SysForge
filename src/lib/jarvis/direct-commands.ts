@@ -421,22 +421,23 @@ const DIRECT_COMMANDS: DirectCommandPattern[] = [
   },
   {
     patterns: [
-      prog('(открой|запусти|open)\\s+(проводник файлов|поиск файлов|file explorer)'),
+      prog('(открой|запусти|open)\\s+(проводник файлов|поиск файлов|поисковик|file explorer)'),
+      prog('^(поисковик|поиск файлов)$'),
     ],
     handler: () => ({
       toolName: 'open_app',
       args: { appId: 'file-explorer' },
-      displayText: 'Открываю быстрый файловый проводник.',
+      displayText: 'Открываю быстрый поисковик файлов и содержимого.',
     }),
   },
   {
     patterns: [
-      prog(`(${CLOSE_VERBS})\\s+(проводник файлов|поиск файлов|file explorer)`),
+      prog(`(${CLOSE_VERBS})\\s+(проводник файлов|поиск файлов|поисковик|file explorer)`),
     ],
     handler: () => ({
       toolName: 'close_app',
       args: { appId: 'file-explorer' },
-      displayText: 'Закрываю файловый проводник.',
+      displayText: 'Закрываю поисковик.',
     }),
   },
   {

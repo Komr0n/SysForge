@@ -75,7 +75,7 @@ const apps: AppItem[] = [
   { id: 'startup-manager', title: 'Startup Manager', icon: <Power size={16} />, category: 'system' },
   { id: 'disk-analyzer', title: 'Disk Analyzer', icon: <HardDrive size={16} />, category: 'system' },
   { id: 'duplicate-finder', title: 'Duplicate Finder', icon: <Copy size={16} />, category: 'system' },
-  { id: 'file-explorer', title: 'File Explorer', icon: <FolderSearch size={16} />, category: 'system' },
+  { id: 'file-explorer', title: 'File Search (Поисковик)', icon: <FolderSearch size={16} />, category: 'system' },
   // Developer
   { id: 'api-tester', title: 'API Tester', icon: <Beaker size={16} />, category: 'developer' },
   { id: 'formatter', title: 'Data Formatter', icon: <Braces size={16} />, category: 'developer' },
