@@ -189,6 +189,7 @@ export default function App() {
       <ErrorBoundary fallback={null}>
         <JarvisChat
           isOpen={jarvisChatOpen}
+          onOpen={() => setJarvisChatOpen(true)}
           onClose={() => setJarvisChatOpen(false)}
           onStateChange={setJarvisState}
           onNewLog={handleNewLog}

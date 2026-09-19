@@ -48,12 +48,13 @@ interface ChatMessage {
 
 interface JarvisChatProps {
   isOpen: boolean;
+  onOpen?: () => void;
   onClose: () => void;
   onStateChange?: (state: JarvisState) => void;
   onNewLog?: (entry: LogEntry) => void;
 }
 
-export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisChatProps) {
+export function JarvisChat({ isOpen, onOpen, onClose, onStateChange, onNewLog }: JarvisChatProps) {
   const { jarvis, setJarvisConfig, setTheme, setBackground } = useSettingsStore((s) => ({
     jarvis: s.jarvis,
     setJarvisConfig: s.setJarvisConfig,
@@ -321,6 +322,9 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
 
     const removeStateListener = vs.onStateChange((state) => {
       setJarvisState(state);
+      if (state === 'speaking' || state === 'listening') {
+        onOpen?.();
+      }
     });
 
     const removeVolumeListener = vs.onVolume((vol: number) => {
@@ -338,6 +342,7 @@ export function JarvisChat({ isOpen, onClose, onStateChange, onNewLog }: JarvisC
 
     const removeCommandListener = vs.onCommand((cmd: string) => {
       setInterimText('');
+      onOpen?.();
       handleCommandRef.current(cmd, true);
     });
 

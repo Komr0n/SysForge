@@ -47,6 +47,8 @@ src-tauri/target/
 **/target/
 src-tauri/gen/schemas/
 *.rs.bk
+src-tauri/.fastembed_cache/
+**//fastembed_cache
 
 # OS / misc
 .cache/

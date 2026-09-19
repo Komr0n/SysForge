@@ -90,20 +90,20 @@ export class AudioRecorder {
 
         events.onVolume?.(volume);
 
-        // VAD: порог человеческой речи
-        if (volume > 8) {
+        // VAD: порог человеческой речи (значение 12 фильтрует фоновый шум)
+        if (volume > 12) {
           hasUserSpoken = true;
           if (this.silenceTimer) {
             clearTimeout(this.silenceTimer);
             this.silenceTimer = null;
           }
         } else if (hasUserSpoken && !this.silenceTimer) {
-          // Тишина ПОСЛЕ того как пользователь заговорил — ставим таймер на 1.4 сек
+          // Тишина ПОСЛЕ того как пользователь заговорил — ставим таймер на 2 сек
           this.silenceTimer = setTimeout(() => {
             if (this.isRecording) {
               events.onSilence?.();
             }
-          }, 1400);
+          }, 2000);
         }
 
         this.animFrameId = requestAnimationFrame(updateMeter);

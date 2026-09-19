@@ -4,7 +4,7 @@
 // 2. Полнотекстовый поиск по содержимому файлов со сниппетами (Content Search)
 // 3. Быстрый веб-поисковик (Google, DuckDuckGo, Yandex, GitHub)
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   Search,
   FolderOpen,
@@ -18,6 +18,9 @@ import {
   Copy,
   Check,
   HardDrive,
+  Zap,
+  Database,
+  RefreshCw,
 } from 'lucide-react';
 
 interface FileEntry {
@@ -90,12 +93,120 @@ export default function FileExplorer() {
   // Результаты поиска по содержимому
   const [contentResults, setContentResults] = useState<ContentMatch[]>([]);
 
+  // MFT State (Part 2.1)
+  const [isMftIndexed, setIsMftIndexed] = useState(false);
+  const [mftIndexing, setMftIndexing] = useState(false);
+  const [mftCount, setMftCount] = useState(0);
+
+  // Tantivy Full-Text State (Part 2.2)
+  const [tantivyIndexing, setTantivyIndexing] = useState(false);
+  const [tantivyProgress, setTantivyProgress] = useState<{ current: number; total: number; indexed: number; file?: string; done?: boolean } | null>(null);
+  const [tantivyDocCount, setTantivyDocCount] = useState(0);
+  const [contentSearchMode, setContentSearchMode] = useState<'tantivy' | 'folder'>('tantivy');
+
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
 
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const checkMftStatus = useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const drive = rootPath.slice(0, 1) || 'C';
+      const indexed = await invoke<boolean>('is_volume_mft_indexed', { drive });
+      setIsMftIndexed(indexed);
+    } catch {
+      setIsMftIndexed(false);
+    }
+  }, [rootPath]);
+
+  const loadTantivyStats = useCallback(async () => {
+    if (!isTauri) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const stats = await invoke<{ indexed_docs: number; index_dir: string }>('get_content_index_stats');
+      setTantivyDocCount(stats.indexed_docs);
+    } catch {
+      setTantivyDocCount(0);
+    }
+  }, []);
+
+  const startIndexVolumeMft = async () => {
+    if (!isTauri) return;
+    setMftIndexing(true);
+    setMftCount(0);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const drive = rootPath.slice(0, 1) || 'C';
+      const count = await invoke<number>('index_volume_mft', { drive });
+      setMftCount(count);
+      setIsMftIndexed(true);
+    } catch (err) {
+      console.warn('MFT indexing error:', err);
+    } finally {
+      setMftIndexing(false);
+    }
+  };
+
+  const startIndexFolderForContent = async () => {
+    if (!isTauri || !rootPath) return;
+    setTantivyIndexing(true);
+    setTantivyProgress(null);
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke<number>('index_folder_for_content', { root: rootPath });
+      await loadTantivyStats();
+    } catch (err) {
+      console.warn('Tantivy indexing error:', err);
+    } finally {
+      setTantivyIndexing(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isTauri) return;
+    let unlistenProgress: (() => void) | undefined;
+    let unlistenMft: (() => void) | undefined;
+
+    import('@tauri-apps/api/event').then(({ listen }) => {
+      listen<{ current: number; total: number; indexed: number; file?: string; done?: boolean }>(
+        'sysforge:index-progress',
+        (event) => {
+          setTantivyProgress(event.payload);
+          if (event.payload.done) {
+            setTantivyIndexing(false);
+            void loadTantivyStats();
+          }
+        }
+      ).then((unsub) => {
+        unlistenProgress = unsub;
+      });
+
+      listen<{ drive: string; indexed: number; done: boolean }>(
+        'sysforge:mft-progress',
+        (event) => {
+          setMftCount(event.payload.indexed);
+          if (event.payload.done) {
+            setMftIndexing(false);
+            setIsMftIndexed(true);
+          }
+        }
+      ).then((unsub) => {
+        unlistenMft = unsub;
+      });
+    });
+
+    void checkMftStatus();
+    void loadTantivyStats();
+
+    return () => {
+      unlistenProgress?.();
+      unlistenMft?.();
+    };
+  }, [checkMftStatus, loadTantivyStats]);
 
   const pickRoot = async () => {
     if (isTauri) {
@@ -176,21 +287,29 @@ export default function FileExplorer() {
     }
   }, []);
 
-  // Поиск по содержимому (Full-Text)
+  // Поиск по содержимому (Full-Text с Tantivy)
   const doContentSearch = useCallback(async (q: string, ext: string, root: string) => {
-    if (!q.trim() || !root) return;
+    if (!q.trim()) return;
     setLoading(true);
     setError(null);
     try {
       if (isTauri) {
         const { invoke } = await import('@tauri-apps/api/core');
-        const res = await invoke<ContentMatch[]>('search_files_by_content', {
-          query: q,
-          root,
-          extensionFilter: ext.trim() || null,
-          limit: 120,
-        });
-        setContentResults(res);
+        if (contentSearchMode === 'tantivy' && tantivyDocCount > 0) {
+          const res = await invoke<ContentMatch[]>('search_indexed_content', {
+            query: q,
+            limit: 120,
+          });
+          setContentResults(res);
+        } else {
+          const res = await invoke<ContentMatch[]>('search_files_by_content', {
+            query: q,
+            root,
+            extensionFilter: ext.trim() || null,
+            limit: 120,
+          });
+          setContentResults(res);
+        }
       } else {
         // Mock data
         const demo: ContentMatch[] = [
@@ -219,7 +338,7 @@ export default function FileExplorer() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [contentSearchMode, tantivyDocCount]);
 
   // Запуск веб-поиска
   const doWebSearch = async () => {
@@ -438,6 +557,121 @@ export default function FileExplorer() {
             <FolderOpen size={11} />
             {rootPath ? (rootPath.length > 25 ? `…${rootPath.slice(-22)}` : rootPath) : 'Обзор папки…'}
           </button>
+
+          {/* MFT status & trigger for filename tab */}
+          {activeTab === 'filename' && (
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+              {mftIndexing ? (
+                <span style={{ fontSize: 10, color: '#00ff88', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                  Индексация MFT: {mftCount.toLocaleString()}...
+                </span>
+              ) : isMftIndexed ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 10, color: '#00ff88', background: 'rgba(0,255,136,0.1)', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(0,255,136,0.3)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <Zap size={10} color="#00ff88" />
+                    MFT Индекс ({mftCount > 0 ? `${mftCount.toLocaleString()} файлов` : '<1ms'})
+                  </span>
+                  <button
+                    onClick={startIndexVolumeMft}
+                    title="Переиндексировать MFT"
+                    style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 2 }}
+                  >
+                    <RefreshCw size={11} />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={startIndexVolumeMft}
+                  style={{
+                    background: 'rgba(0, 255, 136, 0.1)',
+                    border: '1px solid rgba(0, 255, 136, 0.3)',
+                    color: '#00ff88',
+                    borderRadius: 4,
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    fontFamily: 'inherit',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  title="Сканировать Master File Table для мгновенного поиска файлов"
+                >
+                  <Zap size={10} />
+                  ⚡ MFT Индекс ({rootPath.slice(0, 1) || 'C'}:)
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* Tantivy Full-Text controls for content tab */}
+          {activeTab === 'content' && (
+            <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', gap: 2, background: 'rgba(0,0,0,0.3)', padding: 2, borderRadius: 4, border: '1px solid var(--border-color)' }}>
+                <button
+                  onClick={() => setContentSearchMode('tantivy')}
+                  style={{
+                    background: contentSearchMode === 'tantivy' ? 'rgba(0,240,255,0.2)' : 'transparent',
+                    border: 'none',
+                    borderRadius: 3,
+                    color: contentSearchMode === 'tantivy' ? '#00f0ff' : 'var(--text-muted)',
+                    fontSize: 9.5,
+                    padding: '1px 6px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 3,
+                  }}
+                >
+                  <Database size={10} />
+                  Tantivy {tantivyDocCount > 0 && `(${tantivyDocCount})`}
+                </button>
+                <button
+                  onClick={() => setContentSearchMode('folder')}
+                  style={{
+                    background: contentSearchMode === 'folder' ? 'rgba(255,255,255,0.1)' : 'transparent',
+                    border: 'none',
+                    borderRadius: 3,
+                    color: contentSearchMode === 'folder' ? '#ffffff' : 'var(--text-muted)',
+                    fontSize: 9.5,
+                    padding: '1px 6px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Прямой обход
+                </button>
+              </div>
+
+              {tantivyIndexing ? (
+                <span style={{ fontSize: 10, color: '#00f0ff', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <RefreshCw size={11} style={{ animation: 'spin 1s linear infinite' }} />
+                  {tantivyProgress ? `${tantivyProgress.current}/${tantivyProgress.total} (${tantivyProgress.indexed})` : 'Индексация...'}
+                </span>
+              ) : (
+                <button
+                  onClick={startIndexFolderForContent}
+                  style={{
+                    background: 'rgba(0, 240, 255, 0.1)',
+                    border: '1px solid rgba(0, 240, 255, 0.3)',
+                    color: '#00f0ff',
+                    borderRadius: 4,
+                    padding: '2px 8px',
+                    fontSize: 10,
+                    fontFamily: 'inherit',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  title="Проиндексировать выбранную папку в полнотекстовую базу Tantivy"
+                >
+                  <Zap size={10} />
+                  ⚡ Индексировать в Tantivy
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -868,9 +1102,13 @@ export default function FileExplorer() {
                         overflowX: 'auto',
                       }}
                     >
-                      <code>
-                        {item.snippet}
-                      </code>
+                      <code
+                        dangerouslySetInnerHTML={{
+                          __html: item.snippet.includes('<mark>')
+                            ? item.snippet.replace(/<mark>/g, '<span style="color:#00f0ff;font-weight:700;background:rgba(0,240,255,0.18);padding:1px 4px;border-radius:3px">').replace(/<\/mark>/g, '</span>')
+                            : item.snippet,
+                        }}
+                      />
                     </div>
                   </div>
                 ))}

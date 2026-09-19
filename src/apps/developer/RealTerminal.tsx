@@ -89,6 +89,11 @@ export default function RealTerminal() {
     return () => {
       window.removeEventListener('resize', handleResize);
       unlisten?.();
+      if (isTauri && sessionId.current) {
+        import('@tauri-apps/api/core').then(({ invoke }) => {
+          invoke('close_terminal_session', { sessionId: sessionId.current }).catch(() => {});
+        });
+      }
       term.dispose();
     };
   }, []);

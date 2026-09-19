@@ -150,6 +150,7 @@ impl SystemSnapshotState {
 struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn portable_pty::MasterPty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
 }
 
 pub struct TerminalState {
@@ -215,12 +216,12 @@ struct StartupEntry {
 // ─── Part K: File Explorer structs ───────────────────────────────────────────
 
 #[derive(Serialize, Clone)]
-struct FileEntry {
-    name: String,
-    path: String,
-    size: u64,
-    is_dir: bool,
-    extension: String,
+pub struct FileEntry {
+    pub name: String,
+    pub path: String,
+    pub size: u64,
+    pub is_dir: bool,
+    pub extension: String,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -743,6 +744,76 @@ async fn jarvis_llm_request(req: LlmChatRequest) -> Result<serde_json::Value, St
     let json: serde_json::Value = serde_json::from_str(&text)
         .unwrap_or_else(|_| serde_json::json!({ "response": text }));
     Ok(json)
+}
+
+/// Проксирование аудио-транскрипции через Rust (Groq/OpenAI Whisper API).
+/// Принимает base64-кодированное аудио и отправляет multipart/form-data запрос.
+#[derive(serde::Deserialize)]
+struct WhisperTranscribeRequest {
+    url: String,
+    api_key: String,
+    model: String,
+    language: String,
+    audio_base64: String,
+    file_name: String,
+    mime_type: String,
+}
+
+#[tauri::command]
+async fn jarvis_whisper_transcribe(req: WhisperTranscribeRequest) -> Result<String, String> {
+    if !req.url.starts_with("https://") {
+        return Err("Разрешены только https:// URL".into());
+    }
+
+    use base64::Engine;
+    let audio_bytes = base64::engine::general_purpose::STANDARD
+        .decode(&req.audio_base64)
+        .map_err(|e| format!("Ошибка декодирования base64 аудио: {}", e))?;
+
+    if audio_bytes.len() < 500 {
+        return Err("Аудио слишком короткое для транскрипции".into());
+    }
+
+    let file_part = reqwest::multipart::Part::bytes(audio_bytes)
+        .file_name(req.file_name)
+        .mime_str(&req.mime_type)
+        .map_err(|e| e.to_string())?;
+
+    let form = reqwest::multipart::Form::new()
+        .part("file", file_part)
+        .text("model", req.model)
+        .text("language", req.language);
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let resp = client
+        .post(&req.url)
+        .header("Authorization", format!("Bearer {}", req.api_key))
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Whisper API запрос не удался: {}", e))?;
+
+    let status = resp.status();
+    let body = resp.text().await.map_err(|e| e.to_string())?;
+
+    if !status.is_success() {
+        return Err(format!("Whisper API HTTP {}: {}", status, body));
+    }
+
+    // Парсим JSON-ответ и возвращаем текст
+    let json: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| format!("Ошибка парсинга Whisper ответа: {}", e))?;
+    let text = json.get("text")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+
+    Ok(text)
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -1691,7 +1762,8 @@ fn create_terminal_session(
 
     let mut cmd = CommandBuilder::new("powershell.exe");
     cmd.cwd(dirs::home_dir().unwrap_or_default());
-    pair.slave
+    let child = pair
+        .slave
         .spawn_command(cmd)
         .map_err(|e| e.to_string())?;
 
@@ -1724,8 +1796,20 @@ fn create_terminal_session(
         PtySession {
             writer,
             master: pair.master,
+            child,
         },
     );
+    Ok(())
+}
+
+#[tauri::command]
+fn close_terminal_session(state: State<TerminalState>, session_id: String) -> Result<(), String> {
+    let mut sessions = state.sessions.lock().unwrap();
+    if let Some(mut session) = sessions.remove(&session_id) {
+        let _ = session.child.kill();
+        drop(session.writer);
+        drop(session.master);
+    }
     Ok(())
 }
 
@@ -1785,74 +1869,110 @@ fn dir_size_shallow_estimate(path: &std::path::Path) -> u64 {
 
 #[tauri::command]
 async fn scan_directory_sizes(path: String) -> Result<Vec<DirNode>, String> {
-    let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
-    let mut nodes = Vec::new();
-    for entry in entries.flatten() {
-        let meta = entry.metadata().map_err(|e| e.to_string())?;
-        let size = if meta.is_dir() {
-            dir_size_shallow_estimate(&entry.path())
-        } else {
-            meta.len()
-        };
-        nodes.push(DirNode {
-            name: entry.file_name().to_string_lossy().to_string(),
-            path: entry.path().to_string_lossy().to_string(),
-            size,
-            is_dir: meta.is_dir(),
-            children_scanned: false,
-        });
-    }
-    nodes.sort_by(|a, b| b.size.cmp(&a.size));
-    Ok(nodes)
+    tokio::task::spawn_blocking(move || {
+        let entries = std::fs::read_dir(&path).map_err(|e| e.to_string())?;
+        let mut nodes = Vec::new();
+        for entry in entries.flatten() {
+            let meta = entry.metadata().map_err(|e| e.to_string())?;
+            let size = if meta.is_dir() {
+                dir_size_shallow_estimate(&entry.path())
+            } else {
+                meta.len()
+            };
+            nodes.push(DirNode {
+                name: entry.file_name().to_string_lossy().to_string(),
+                path: entry.path().to_string_lossy().to_string(),
+                size,
+                is_dir: meta.is_dir(),
+                children_scanned: false,
+            });
+        }
+        nodes.sort_by(|a, b| b.size.cmp(&a.size));
+        Ok(nodes)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Part O — Duplicate File Finder Commands
+// Part O — Duplicate File Finder Commands (Streaming Blake3, Non-Blocking)
 // ─────────────────────────────────────────────────────────────────────────────
+
+fn hash_file_streaming(path: &std::path::Path) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut hasher = blake3::Hasher::new();
+    let mut buf = vec![0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut buf).ok()?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    Some(hasher.finalize().to_hex().to_string())
+}
+
+fn hash_prefix(path: &std::path::Path, bytes: usize) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buf = vec![0u8; bytes];
+    let n = file.read(&mut buf).ok()?;
+    Some(blake3::hash(&buf[..n]).to_hex().to_string())
+}
 
 #[tauri::command]
 async fn find_duplicate_files(root: String) -> Result<Vec<DuplicateGroup>, String> {
-    use std::collections::HashMap;
-    use walkdir::WalkDir;
-    let mut by_size: HashMap<u64, Vec<std::path::PathBuf>> = HashMap::new();
-    for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
-        if let Ok(meta) = entry.metadata() {
-            if meta.is_file() && meta.len() > 0 {
-                by_size.entry(meta.len()).or_default().push(entry.into_path());
-            }
-        }
-    }
-    let mut groups = Vec::new();
-    for (size, paths) in by_size.into_iter().filter(|(_, p)| p.len() > 1) {
-        let mut by_hash: HashMap<String, Vec<String>> = HashMap::new();
-        for path in paths {
-            if let Ok(bytes) = std::fs::read(&path) {
-                let hash = blake3::hash(&bytes).to_hex().to_string();
-                by_hash
-                    .entry(hash)
-                    .or_default()
-                    .push(path.to_string_lossy().to_string());
-            }
-        }
-        for (hash, group_paths) in by_hash {
-            if group_paths.len() > 1 {
-                groups.push(DuplicateGroup {
-                    hash,
-                    size,
-                    paths: group_paths,
-                });
-            }
-        }
-    }
-    groups.sort_by(|a, b| {
-        (b.size * b.paths.len() as u64).cmp(&(a.size * a.paths.len() as u64))
-    });
-    Ok(groups)
-}
+    tokio::task::spawn_blocking(move || {
+        use std::collections::HashMap;
+        use walkdir::WalkDir;
 
-#[tauri::command]
-async fn delete_file(path: String) -> Result<(), String> {
-    std::fs::remove_file(&path).map_err(|e| e.to_string())
+        // Phase 1 — Grouping by size (metadata only, no content read)
+        let mut by_size: HashMap<u64, Vec<std::path::PathBuf>> = HashMap::new();
+        for entry in WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_file() && meta.len() > 0 {
+                    by_size.entry(meta.len()).or_default().push(entry.into_path());
+                }
+            }
+        }
+
+        let mut groups = Vec::new();
+        for (size, paths) in by_size.into_iter().filter(|(_, p)| p.len() > 1) {
+            // Phase 2 — Partial hash of first 8 KB to filter out non-duplicates quickly
+            let mut by_prefix: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
+            for path in paths {
+                if let Some(h) = hash_prefix(&path, 8192) {
+                    by_prefix.entry(h).or_default().push(path);
+                }
+            }
+
+            // Phase 3 — Full streaming hash in 64 KB chunks only for surviving candidates
+            for (_, candidates) in by_prefix.into_iter().filter(|(_, p)| p.len() > 1) {
+                let mut by_hash: HashMap<String, Vec<String>> = HashMap::new();
+                for path in candidates {
+                    if let Some(h) = hash_file_streaming(&path) {
+                        by_hash.entry(h).or_default().push(path.to_string_lossy().to_string());
+                    }
+                }
+                for (hash, group_paths) in by_hash {
+                    if group_paths.len() > 1 {
+                        groups.push(DuplicateGroup {
+                            hash,
+                            size,
+                            paths: group_paths,
+                        });
+                    }
+                }
+            }
+        }
+        groups.sort_by(|a, b| {
+            (b.size * b.paths.len() as u64).cmp(&(a.size * a.paths.len() as u64))
+        });
+        Ok(groups)
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1954,8 +2074,221 @@ pub struct ContentSearchMatch {
     pub snippet: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ContentIndexStats {
+    pub indexed_docs: usize,
+    pub index_dir: String,
+}
+
+pub struct FilenameIndexState {
+    pub entries: std::sync::RwLock<Vec<FileEntry>>,
+    pub indexed_volumes: std::sync::RwLock<Vec<char>>,
+}
+
+pub struct ContentIndexState {
+    pub index: tantivy::Index,
+    pub writer: std::sync::Mutex<tantivy::IndexWriter>,
+    pub reader: tantivy::IndexReader,
+    pub path_field: tantivy::schema::Field,
+    pub filename_field: tantivy::schema::Field,
+    pub content_field: tantivy::schema::Field,
+    pub extension_field: tantivy::schema::Field,
+    pub modified_ms_field: tantivy::schema::Field,
+}
+
+fn init_content_index_state() -> ContentIndexState {
+    use tantivy::schema::*;
+    use tantivy::Index;
+
+    let mut b = Schema::builder();
+    let path_field = b.add_text_field("path", STRING | STORED);
+    let filename_field = b.add_text_field("filename", TEXT | STORED);
+    let content_field = b.add_text_field("content", TEXT | STORED);
+    let extension_field = b.add_text_field("extension", STRING | STORED);
+    let modified_ms_field = b.add_u64_field("modified_ms", STORED | FAST);
+    let schema = b.build();
+
+    let index_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("sysforge")
+        .join("search-index");
+    let _ = std::fs::create_dir_all(&index_dir);
+
+    let index = tantivy::directory::MmapDirectory::open(&index_dir)
+        .ok()
+        .and_then(|dir| Index::open_or_create(dir, schema.clone()).ok())
+        .unwrap_or_else(|| Index::create_in_ram(schema.clone()));
+
+    let writer = index.writer(25_000_000).unwrap_or_else(|_| index.writer(5_000_000).unwrap());
+    let reader = index.reader().unwrap();
+
+    ContentIndexState {
+        index,
+        writer: std::sync::Mutex::new(writer),
+        reader,
+        path_field,
+        filename_field,
+        content_field,
+        extension_field,
+        modified_ms_field,
+    }
+}
+
+#[tauri::command]
+fn is_volume_mft_indexed(mft_state: State<'_, FilenameIndexState>, drive: String) -> bool {
+    let drive_char = drive.chars().next().unwrap_or('C').to_ascii_uppercase();
+    if let Ok(volumes) = mft_state.indexed_volumes.read() {
+        volumes.contains(&drive_char)
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+async fn index_volume_mft(
+    app: tauri::AppHandle,
+    mft_state: State<'_, FilenameIndexState>,
+    drive: String,
+) -> Result<usize, String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    let drive_char = drive.chars().next().unwrap_or('C').to_ascii_uppercase();
+
+    // Spawn mft_helper
+    let exe_path = std::env::current_exe().map_err(|e| e.to_string())?;
+    let candidates = [
+        exe_path.parent().unwrap_or(std::path::Path::new("")).join("mft_helper.exe"),
+        std::path::PathBuf::from("src-tauri/target/debug/mft_helper.exe"),
+        std::path::PathBuf::from("target/debug/mft_helper.exe"),
+        std::path::PathBuf::from("mft_helper.exe"),
+    ];
+
+    let helper_path = candidates
+        .iter()
+        .find(|p| p.exists())
+        .cloned()
+        .ok_or_else(|| "mft_helper.exe not found. Build it with `cargo build --bin mft_helper`".to_string())?;
+
+    let mut child = Command::new(&helper_path)
+        .arg(drive_char.to_string())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to spawn mft_helper: {}", e))?;
+
+    let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+    let reader = BufReader::new(stdout);
+
+    #[derive(Deserialize)]
+    struct MftLine {
+        path: String,
+        size: u64,
+        is_dir: bool,
+    }
+
+    let mut loaded = Vec::new();
+    let mut count = 0;
+
+    for line in reader.lines() {
+        if let Ok(l) = line {
+            if let Ok(entry) = serde_json::from_str::<MftLine>(&l) {
+                let p = std::path::Path::new(&entry.path);
+                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                let extension = p.extension().map(|e| e.to_string_lossy().to_string().to_lowercase()).unwrap_or_default();
+                
+                loaded.push(FileEntry {
+                    name,
+                    path: entry.path,
+                    size: entry.size,
+                    is_dir: entry.is_dir,
+                    extension,
+                });
+                count += 1;
+
+                if count % 15000 == 0 {
+                    let _ = app.emit("sysforge:mft-progress", serde_json::json!({
+                        "drive": drive_char.to_string(),
+                        "indexed": count,
+                        "done": false
+                    }));
+                }
+            }
+        }
+    }
+
+    let _ = child.wait();
+
+    {
+        let mut entries_guard = mft_state.entries.write().map_err(|e| e.to_string())?;
+        let drive_prefix = format!("{}:", drive_char);
+        entries_guard.retain(|e| !e.path.to_uppercase().starts_with(&drive_prefix));
+        entries_guard.extend(loaded);
+
+        let mut volumes_guard = mft_state.indexed_volumes.write().map_err(|e| e.to_string())?;
+        if !volumes_guard.contains(&drive_char) {
+            volumes_guard.push(drive_char);
+        }
+    }
+
+    let _ = app.emit("sysforge:mft-progress", serde_json::json!({
+        "drive": drive_char.to_string(),
+        "indexed": count,
+        "done": true
+    }));
+
+    Ok(count)
+}
+
 #[tauri::command]
 async fn search_files_by_name(
+    query: String,
+    root: String,
+    extension_filter: Option<String>,
+    limit: Option<usize>,
+    mft_state: State<'_, FilenameIndexState>,
+) -> Result<Vec<FileEntry>, String> {
+    let drive_char = root.chars().next().unwrap_or('C').to_ascii_uppercase();
+    let is_indexed = {
+        if let Ok(volumes) = mft_state.indexed_volumes.read() {
+            volumes.contains(&drive_char)
+        } else {
+            false
+        }
+    };
+
+    if is_indexed {
+        if let Ok(entries_guard) = mft_state.entries.read() {
+            let q = query.to_lowercase();
+            let root_upper = root.to_uppercase();
+            let max = limit.unwrap_or(250);
+
+            let mut results = Vec::new();
+            for entry in entries_guard.iter() {
+                if results.len() >= max {
+                    break;
+                }
+                if !entry.path.to_uppercase().starts_with(&root_upper) {
+                    continue;
+                }
+                if !entry.name.to_lowercase().contains(&q) {
+                    continue;
+                }
+                if let Some(ref ext) = extension_filter {
+                    if !entry.extension.eq_ignore_ascii_case(ext) {
+                        continue;
+                    }
+                }
+                results.push(entry.clone());
+            }
+            return Ok(results);
+        }
+    }
+
+    search_files_by_name_fallback(query, root, extension_filter, limit).await
+}
+
+async fn search_files_by_name_fallback(
     query: String,
     root: String,
     extension_filter: Option<String>,
@@ -2172,6 +2505,32 @@ fn extract_text_from_pdf(path: &std::path::Path) -> Option<String> {
     pdf_extract::extract_text(path).ok()
 }
 
+fn extract_any_text(path: &std::path::Path) -> Option<String> {
+    let ext = path.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+    match ext.as_str() {
+        "pdf" => extract_text_from_pdf(path),
+        "docx" => extract_text_from_docx(path),
+        "xlsx" => extract_text_from_xlsx(path),
+        "pptx" => extract_text_from_pptx(path),
+        "odt" | "ods" | "odp" => extract_text_from_opendocument(path),
+        "txt" | "md" | "log" | "json" | "csv" | "xml" | "yaml" | "yml" | "ts" | "tsx" | "js"
+        | "jsx" | "py" | "rs" | "html" | "css" | "scss" | "sql" | "sh" | "bat" | "ps1" | "ini"
+        | "conf" | "env" | "toml" | "c" | "cpp" | "h" | "java" | "cs" => {
+            use std::io::Read;
+            if let Ok(mut f) = std::fs::File::open(path) {
+                let mut chunk = vec![0u8; 1024 * 1024 * 2];
+                if let Ok(n) = f.read(&mut chunk) {
+                    if n > 0 {
+                        return Some(String::from_utf8_lossy(&chunk[..n]).to_string());
+                    }
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 #[tauri::command]
 async fn search_files_by_content(
     query: String,
@@ -2320,6 +2679,172 @@ async fn search_files_by_content(
 }
 
 #[tauri::command]
+async fn index_folder_for_content(
+    app: tauri::AppHandle,
+    root: String,
+) -> Result<usize, String> {
+    use walkdir::WalkDir;
+    use tantivy::doc;
+    use tauri::Emitter;
+    use tauri::Manager;
+
+    tokio::task::spawn_blocking(move || {
+        let state: State<ContentIndexState> = app.state();
+        let path_field = state.path_field;
+        let filename_field = state.filename_field;
+        let content_field = state.content_field;
+        let extension_field = state.extension_field;
+        let modified_ms_field = state.modified_ms_field;
+
+        let files: Vec<_> = WalkDir::new(&root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .collect();
+        let total = files.len();
+        let mut indexed_count = 0;
+
+        let mut writer_guard = state.writer.lock().map_err(|e| e.to_string())?;
+
+        for (i, entry) in files.iter().enumerate() {
+            let p = entry.path();
+            let p_str = p.to_string_lossy().to_string();
+            if p_str.contains(".git") || p_str.contains("node_modules") || p_str.contains("target") {
+                continue;
+            }
+
+            if let Some(text) = extract_any_text(p) {
+                if !text.trim().is_empty() {
+                    let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("").to_lowercase();
+                    let filename = entry.file_name().to_string_lossy().to_string();
+                    let mod_ms = entry.metadata().ok().and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_millis() as u64)
+                        .unwrap_or(0);
+
+                    let term = tantivy::Term::from_field_text(path_field, &p_str);
+                    writer_guard.delete_term(term);
+
+                    let doc = doc!(
+                        path_field => p_str,
+                        filename_field => filename,
+                        content_field => text,
+                        extension_field => ext,
+                        modified_ms_field => mod_ms,
+                    );
+                    let _ = writer_guard.add_document(doc);
+                    indexed_count += 1;
+                }
+            }
+
+            if i % 25 == 0 || i == total.saturating_sub(1) {
+                let _ = app.emit("sysforge:index-progress", serde_json::json!({
+                    "current": i + 1,
+                    "total": total,
+                    "indexed": indexed_count,
+                    "file": entry.file_name().to_string_lossy()
+                }));
+            }
+        }
+
+        writer_guard.commit().map_err(|e| e.to_string())?;
+        let _ = state.reader.reload();
+
+        let _ = app.emit("sysforge:index-progress", serde_json::json!({
+            "current": total,
+            "total": total,
+            "indexed": indexed_count,
+            "done": true
+        }));
+
+        Ok(indexed_count)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn search_indexed_content(
+    state: State<'_, ContentIndexState>,
+    query: String,
+    limit: Option<usize>,
+) -> Result<Vec<ContentSearchMatch>, String> {
+    use tantivy::collector::TopDocs;
+    use tantivy::query::QueryParser;
+    use tantivy::snippet::SnippetGenerator;
+    use tantivy::schema::Value;
+
+    let q = query.trim().to_string();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let max = limit.unwrap_or(50);
+
+    let path_field = state.path_field;
+    let filename_field = state.filename_field;
+    let content_field = state.content_field;
+    let extension_field = state.extension_field;
+
+    let searcher = state.reader.searcher();
+    let query_parser = QueryParser::for_index(&state.index, vec![content_field, filename_field]);
+    let parsed_query = query_parser.parse_query(&q).map_err(|e| e.to_string())?;
+
+    let top_docs = searcher
+        .search(&parsed_query, &TopDocs::with_limit(max).order_by_score())
+        .map_err(|e| e.to_string())?;
+
+    let snippet_gen = SnippetGenerator::create(&searcher, &parsed_query, content_field)
+        .map_err(|e| e.to_string())?;
+
+    let mut matches = Vec::new();
+    for (_score, doc_address) in top_docs {
+        if let Ok(doc) = searcher.doc::<tantivy::TantivyDocument>(doc_address) {
+            let snippet = snippet_gen.snippet_from_doc(&doc);
+
+            let path_val = doc.get_first(path_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let fname_val = doc.get_first(filename_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let ext_val = doc.get_first(extension_field).and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let size = std::fs::metadata(&path_val).map(|m| m.len()).unwrap_or(0);
+
+            let clean_snippet = snippet.to_html()
+                .replace("<b>", "<mark>")
+                .replace("</b>", "</mark>");
+
+            matches.push(ContentSearchMatch {
+                path: path_val,
+                filename: fname_val,
+                extension: ext_val,
+                size,
+                line_number: 1,
+                snippet: if clean_snippet.trim().is_empty() {
+                    "Совпадение в документе".to_string()
+                } else {
+                    clean_snippet
+                },
+            });
+        }
+    }
+
+    Ok(matches)
+}
+
+#[tauri::command]
+fn get_content_index_stats(state: State<'_, ContentIndexState>) -> ContentIndexStats {
+    let searcher = state.reader.searcher();
+    let num_docs = searcher.num_docs() as usize;
+    let index_dir = dirs::data_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("sysforge")
+        .join("search-index")
+        .to_string_lossy()
+        .to_string();
+    ContentIndexStats {
+        indexed_docs: num_docs,
+        index_dir,
+    }
+}
+
+#[tauri::command]
 async fn open_path_in_explorer(path: String) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
@@ -2445,6 +2970,11 @@ pub fn run() {
         .manage(TerminalState {
             sessions: Mutex::new(HashMap::new()),
         })
+        .manage(FilenameIndexState {
+            entries: std::sync::RwLock::new(Vec::new()),
+            indexed_volumes: std::sync::RwLock::new(Vec::new()),
+        })
+        .manage(init_content_index_state())
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -2468,6 +2998,7 @@ pub fn run() {
             jarvis_open_system_app,
             jarvis_lock_screen,
             jarvis_llm_request,
+            jarvis_whisper_transcribe,
             jarvis_find_app,
             jarvis_launch_registered_app,
             scan_ports,
@@ -2484,19 +3015,24 @@ pub fn run() {
             decrypt_secret,
             // Part L: PTY Terminal
             create_terminal_session,
+            close_terminal_session,
             write_to_terminal,
             resize_terminal,
             // Part N: Disk Analyzer
             scan_directory_sizes,
             // Part O: Duplicate Finder
             find_duplicate_files,
-            delete_file,
             // Part P: Startup Manager
             list_startup_entries,
             toggle_startup_entry,
             // Part K: File Explorer / Search Engine
             search_files_by_name,
             search_files_by_content,
+            index_volume_mft,
+            is_volume_mft_indexed,
+            index_folder_for_content,
+            search_indexed_content,
+            get_content_index_stats,
             open_path_in_explorer,
             open_file_externally,
         ])

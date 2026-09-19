@@ -90,10 +90,10 @@ export default function DuplicateFinder() {
     let count = 0;
     try {
       if (isTauri) {
-        const { invoke } = await import('@tauri-apps/api/core');
+        const { remove } = await import('@tauri-apps/plugin-fs');
         for (const path of selectedPaths) {
           try {
-            await invoke('delete_file', { path });
+            await remove(path);
             count++;
           } catch {
             // Continue on individual failures

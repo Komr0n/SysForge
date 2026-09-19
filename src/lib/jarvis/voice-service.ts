@@ -65,7 +65,10 @@ export const isSpeechRecognitionSupported = !!SpeechRecognitionClass;
 export const isSpeechSynthesisSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
 const COMMAND_WAIT_MS = 4500;
-const SPEECH_END_MS = 1600;
+const SPEECH_END_MS = 2000;
+const MAX_COMMAND_MS = 12000;
+const WAKE_WORD_RESTART_DELAY = 300;
+const MAX_WAKE_WORD_RESTARTS = 100; // Лимит рестартов за одну сессию wake word
 
 export class VoiceService {
   private config: VoiceServiceConfig;
@@ -76,6 +79,7 @@ export class VoiceService {
   private isCommandMode = false;
   private micPermissionGranted = false;
   private lastCapturedText = '';
+  private _stopInProgress = false;
 
   private commandWaitTimer: ReturnType<typeof setTimeout> | null = null;
   private speechEndTimer: ReturnType<typeof setTimeout> | null = null;
@@ -85,6 +89,7 @@ export class VoiceService {
   private _pendingFollowUp = false;
   private followUpListeners: ((isFollowUp: boolean) => void)[] = [];
   private interimAccumulator = '';
+  private wakeWordRestartCount = 0;
 
   private stateListeners: StateChangeListener[] = [];
   private transcriptListeners: TranscriptListener[] = [];
@@ -194,12 +199,19 @@ export class VoiceService {
 
     this.stopAllTimers();
     this.destroyRecognition();
-    this.audioRecorder.cancel();
+    // Не отменяем AudioRecorder при рестарте wake word — он не используется в этом режиме
 
     this.isWakeWordMode = true;
     this.isCommandMode = false;
+    this.wakeWordRestartCount = 0;
     this.initRecognition(true /* continuous */);
     this.setState('idle');
+  }
+
+  private restartWakeWordRecognition() {
+    if (!this.isWakeWordMode || !this.config.sttEnabled || !this.config.continuousWakeWord) return;
+    this.destroyRecognition();
+    this.initRecognition(true /* continuous */);
   }
 
   // ─── Manual Listen (кнопка 🎤) ──────────────────────────────────────────────
@@ -286,12 +298,12 @@ export class VoiceService {
       },
     });
 
-    // Максимальный таймаут записи (7.5 секунд), предотвращающий зависание в режиме слушания
+    // Максимальный таймаут записи, предотвращающий зависание в режиме слушания
     this.maxCommandTimer = setTimeout(() => {
       if (this.isCommandMode) {
         this.stopListening();
       }
-    }, 7500);
+    }, MAX_COMMAND_MS);
 
     // 2. Если Web Speech API доступен — запускаем параллельно
     if (isSpeechRecognitionSupported) {
@@ -300,11 +312,16 @@ export class VoiceService {
   }
 
   async stopListening() {
+    // Guard: предотвращаем повторный вход (race condition между VAD, speechEndTimer и maxCommandTimer)
+    if (this._stopInProgress) return;
+    this._stopInProgress = true;
+
     this.stopAllTimers();
     this.destroyRecognition();
     this.notifyVolume(0);
 
     const wasCommandMode = this.isCommandMode;
+    const wasFollowUp = this.isFollowUpWindow;
     this.isCommandMode = false;
     this.isWakeWordMode = false;
     if (this.isFollowUpWindow) {
@@ -323,27 +340,37 @@ export class VoiceService {
       const captured = (this.lastCapturedText || this.interimAccumulator).trim();
 
       if (captured) {
+        this._stopInProgress = false;
         this.onCommandReceived(captured);
       } else if (audioBlob && audioBlob.size > 2000) {
         // Задействуем транскрипцию через Gemini / Groq / OpenAI
         this.setState('thinking');
-        const transcribedText = await transcribeAudioBlob(audioBlob, this.config.cloudProviders);
+        const lang = (this.config.language || 'ru-RU').split('-')[0];
+        const transcribedText = await transcribeAudioBlob(audioBlob, this.config.cloudProviders, lang);
+        this._stopInProgress = false;
         if (transcribedText) {
           this.onCommandReceived(transcribedText);
         } else {
           this.setState('idle');
-          this.notifyError('Голос записан, но распознать текст не удалось. Убедитесь, что настроен API-ключ Gemini или Groq.');
+          if (!wasFollowUp) {
+            this.notifyError('Голос записан, но распознать текст не удалось. Убедитесь, что настроен API-ключ Gemini или Groq.');
+          }
           if (this.config.continuousWakeWord) {
             setTimeout(() => this.startWakeWordListening(), 400);
           }
         }
       } else {
+        this._stopInProgress = false;
         this.setState('idle');
-        this.notifyError('Голос не обнаружен. Нажмите микрофон и произнесите команду.');
+        if (!wasFollowUp) {
+          this.notifyError('Голос не обнаружен. Нажмите микрофон и произнесите команду.');
+        }
         if (this.config.continuousWakeWord) {
           setTimeout(() => this.startWakeWordListening(), 400);
         }
       }
+    } else {
+      this._stopInProgress = false;
     }
   }
 
@@ -382,9 +409,10 @@ export class VoiceService {
 
       if (this.isWakeWordMode) {
         const lower = transcript.toLowerCase();
+        const configured = (this.config.wakeWord || 'джарвис').toLowerCase();
         const wakeWords = [
-          this.config.wakeWord.toLowerCase(),
-          'джарвис', 'жарвис', 'jarvis',
+          configured,
+          'джарвис', 'жарвис', 'джарвиз', 'дарвис', 'jarvis', 'джарвес', 'чарвис',
         ];
 
         const match = wakeWords.find((w) => lower.includes(w));
@@ -417,10 +445,14 @@ export class VoiceService {
           }
         } else {
           this.interimAccumulator = transcript;
+          // Сбрасываем таймер при каждом interim-результате — даём больше времени на речь
           if (this.speechEndTimer) clearTimeout(this.speechEndTimer);
           this.speechEndTimer = setTimeout(() => {
-            if (this.isCommandMode && (this.lastCapturedText || this.interimAccumulator)) {
-              this.stopListening();
+            if (this.isCommandMode) {
+              // Если есть накопленный interim-текст, финализируем его как команду
+              if (this.interimAccumulator || this.lastCapturedText) {
+                this.stopListening();
+              }
             }
           }, SPEECH_END_MS);
         }
@@ -429,12 +461,22 @@ export class VoiceService {
 
     rec.onerror = (event: ISpeechRecognitionErrorEvent) => {
       const err = event.error;
-      const ignoredErrors = ['no-speech', 'aborted'];
+      // Ошибки, которые безопасно игнорировать (no-speech, aborted, network при прерывании)
+      const ignoredErrors = ['no-speech', 'aborted', 'network'];
       if (ignoredErrors.includes(err)) {
         if (this.isWakeWordMode) {
-          setTimeout(() => {
-            if (this.isWakeWordMode) this.startWakeWordListening();
-          }, 400);
+          this.wakeWordRestartCount++;
+          if (this.wakeWordRestartCount < MAX_WAKE_WORD_RESTARTS) {
+            // Прогрессивный backoff при частых рестартах
+            const delay = Math.min(WAKE_WORD_RESTART_DELAY + this.wakeWordRestartCount * 50, 2000);
+            setTimeout(() => {
+              if (this.isWakeWordMode) this.restartWakeWordRecognition();
+            }, delay);
+          } else {
+            console.warn('[VoiceService] Wake word restart limit reached, stopping.');
+            this.isWakeWordMode = false;
+            this.setState('idle');
+          }
         }
         return;
       }
@@ -452,7 +494,7 @@ export class VoiceService {
           if (this._state === 'error') {
             this.setState('idle');
             if (this.isWakeWordMode && this.config.continuousWakeWord) {
-              this.startWakeWordListening();
+              this.restartWakeWordRecognition();
             }
           }
         }, 2000);
@@ -461,9 +503,14 @@ export class VoiceService {
 
     rec.onend = () => {
       if (this.isWakeWordMode) {
-        setTimeout(() => {
-          if (this.isWakeWordMode) this.startWakeWordListening();
-        }, 250);
+        // Web Speech API прервался — рестартуем (происходит часто на Windows WebView2)
+        this.wakeWordRestartCount++;
+        if (this.wakeWordRestartCount < MAX_WAKE_WORD_RESTARTS) {
+          const delay = Math.min(WAKE_WORD_RESTART_DELAY + this.wakeWordRestartCount * 30, 1500);
+          setTimeout(() => {
+            if (this.isWakeWordMode) this.restartWakeWordRecognition();
+          }, delay);
+        }
       }
     };
 

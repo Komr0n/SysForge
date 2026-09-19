@@ -183,7 +183,7 @@ export const DEFAULT_JARVIS_CONFIG: JarvisConfig = {
   voice: {
     language: 'ru-RU',
     wakeWord: 'джарвис',
-    continuousWakeWord: false,
+    continuousWakeWord: true,
     ttsEnabled: true,
     ttsVoice: '',
     ttsRate: 1.0,
@@ -371,6 +371,7 @@ export const useSettingsStore = create<SettingsState>()(
             voice: {
               ...DEFAULT_JARVIS_CONFIG.voice,
               ...saved.jarvis?.voice,
+              continuousWakeWord: true, // Включаем постоянное слушание wake word по умолчанию
               followUpListening: saved.jarvis?.voice?.followUpListening ?? DEFAULT_JARVIS_CONFIG.voice.followUpListening,
               followUpWindowMs: saved.jarvis?.voice?.followUpWindowMs ?? DEFAULT_JARVIS_CONFIG.voice.followUpWindowMs,
             },

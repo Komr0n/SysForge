@@ -9,6 +9,7 @@ import { auditLog } from '../../lib/jarvis/audit-logger';
 import { skillRegistry } from '../../lib/jarvis/skill-registry';
 import { SkillCreator } from './SkillCreator';
 import { Skill, sandboxLabel } from '../../lib/jarvis/sandbox';
+import { routingDiagnostics } from '../../lib/jarvis/hybrid-router';
 
 interface JarvisSettingsProps {
   isOpen: boolean;
@@ -27,7 +28,7 @@ const inputStyle: React.CSSProperties = {
   boxSizing: 'border-box',
 };
 
-type Tab = 'provider' | 'voice' | 'thresholds' | 'skills' | 'audit';
+type Tab = 'provider' | 'voice' | 'thresholds' | 'skills' | 'audit' | 'diagnostics';
 
 export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
   const { jarvis, setJarvisConfig, updateCloudProvider } = useSettingsStore((s) => ({
@@ -116,6 +117,7 @@ export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
     { id: 'voice', label: '🎙️ Голос' },
     { id: 'skills', label: '🔧 Навыки' },
     { id: 'audit', label: '📋 Аудит' },
+    { id: 'diagnostics', label: '📊 Диагностика' },
   ];
 
   return (
@@ -699,6 +701,94 @@ export function JarvisSettings({ isOpen, onClose }: JarvisSettingsProps) {
                         </div>
                         {e.error && <div style={{ color: '#ef4444', marginTop: 2 }}>{e.error}</div>}
                         {e.result && <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{e.result.slice(0, 100)}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            {tab === 'diagnostics' && (
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <span style={{ fontSize: 11, color: 'var(--text-primary)', fontWeight: 600 }}>
+                    Диагностика каскада роутера (Direct → Fuzzy → Embedding → LLM)
+                  </span>
+                  <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                    Всего запросов: {routingDiagnostics.length}
+                  </span>
+                </div>
+
+                {routingDiagnostics.length === 0 ? (
+                  <div style={{ color: 'var(--text-muted)', fontSize: 11, textAlign: 'center', padding: '30px 10px' }}>
+                    Запросов ещё не поступало. Произнесите или отправьте команду Джарвису.
+                  </div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: '60vh', overflowY: 'auto' }}>
+                    {routingDiagnostics.map((d, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          fontSize: 10.5,
+                          padding: '8px 10px',
+                          background: 'rgba(0,0,0,0.3)',
+                          borderRadius: 4,
+                          border: '1px solid var(--border-color)',
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                          <span style={{ color: '#00f0ff', fontWeight: 600 }}>«{d.input}»</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{d.timestamp}</span>
+                        </div>
+
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, paddingLeft: 6, borderLeft: '2px solid rgba(255,255,255,0.08)' }}>
+                          <div>
+                            1. Direct: {d.direct?.matched ? <span style={{ color: '#10b981' }}>✓ Совпало ({d.direct.toolName})</span> : <span style={{ color: 'var(--text-muted)' }}>— нет</span>}
+                          </div>
+                          <div>
+                            2. Fuzzy: {d.fuzzy?.matched ? (
+                              <span style={{ color: (d.fuzzy.score >= 85 ? '#10b981' : d.fuzzy.score >= 70 ? '#f59e0b' : 'var(--text-muted)') }}>
+                                {d.fuzzy.skillId} ({d.fuzzy.score.toFixed(1)}%) {d.fuzzy.phrase && `~ «${d.fuzzy.phrase}»`}
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>— нет</span>}
+                          </div>
+                          <div>
+                            3. Embedding: {d.embedding?.matched ? (
+                              <span style={{ color: (d.embedding.confidence >= 0.70 ? '#10b981' : '#f59e0b') }}>
+                                {d.embedding.skillId} ({(d.embedding.confidence * 100).toFixed(1)}%)
+                              </span>
+                            ) : <span style={{ color: 'var(--text-muted)' }}>— нет</span>}
+                          </div>
+                        </div>
+
+                        <div style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{ color: 'var(--text-muted)' }}>Выполнено через:</span>
+                          <span
+                            style={{
+                              padding: '1px 6px',
+                              borderRadius: 3,
+                              fontSize: 9.5,
+                              fontWeight: 700,
+                              background:
+                                d.chosenTier === 'direct'
+                                  ? 'rgba(16,185,129,0.2)'
+                                  : d.chosenTier.startsWith('fuzzy')
+                                  ? 'rgba(0,240,255,0.2)'
+                                  : d.chosenTier === 'embedding'
+                                  ? 'rgba(139,92,246,0.2)'
+                                  : 'rgba(245,158,11,0.2)',
+                              color:
+                                d.chosenTier === 'direct'
+                                  ? '#10b981'
+                                  : d.chosenTier.startsWith('fuzzy')
+                                  ? '#00f0ff'
+                                  : d.chosenTier === 'embedding'
+                                  ? '#a78bfa'
+                                  : '#f59e0b',
+                            }}
+                          >
+                            {d.chosenTier.toUpperCase()}
+                          </span>
+                        </div>
                       </div>
                     ))}
                   </div>

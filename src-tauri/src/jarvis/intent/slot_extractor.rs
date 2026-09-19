@@ -50,6 +50,38 @@ pub fn extract_slots(
                             }
                         }
                     }
+                    "duration" => {
+                        let lower = input.to_lowercase();
+                        if lower.contains("полтора часа") {
+                            matched_val = Some("90".to_string());
+                        } else if lower.contains("два с половиной часа") {
+                            matched_val = Some("150".to_string());
+                        } else if lower.contains("полчаса") {
+                            matched_val = Some("30".to_string());
+                        } else if lower.contains("через час") || lower.contains("на час") {
+                            matched_val = Some("60".to_string());
+                        } else if lower.contains("два часа") {
+                            matched_val = Some("120".to_string());
+                        } else {
+                            for (i, w) in words.iter().enumerate() {
+                                let clean = w.trim_matches(|c: char| !c.is_numeric());
+                                if let Ok(n) = clean.parse::<u64>() {
+                                    if i + 1 < words.len() {
+                                        let next = words[i + 1].to_lowercase();
+                                        if next.starts_with("час") || next.starts_with("hour") {
+                                            matched_val = Some((n * 60).to_string());
+                                            break;
+                                        } else if next.starts_with("мин") || next.starts_with("min") {
+                                            matched_val = Some(n.to_string());
+                                            break;
+                                        }
+                                    }
+                                    matched_val = Some(n.to_string());
+                                    break;
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }

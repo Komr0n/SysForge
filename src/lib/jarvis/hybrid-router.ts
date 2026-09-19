@@ -7,6 +7,8 @@ import { getOrchestrator } from './orchestrator';
 import { skillRegistry } from './skill-registry';
 import { sessionHistory } from './session-history';
 import { findTool } from './tools-schema';
+import { fuzzyMatch } from './fuzzy-matcher';
+import { extractSlotsForSkill } from './slot-extractor';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 
@@ -28,6 +30,17 @@ export interface EmbeddingMatch {
   confidence: number;
   extracted_slots: Record<string, string>;
 }
+
+export interface RoutingDiagnostic {
+  input: string;
+  timestamp: string;
+  direct?: { matched: boolean; toolName?: string };
+  fuzzy?: { matched: boolean; skillId?: string; score: number; phrase?: string };
+  embedding?: { matched: boolean; skillId?: string; confidence: number };
+  chosenTier: 'direct' | 'fuzzy-high' | 'embedding' | 'fuzzy-med' | 'llm';
+}
+
+export const routingDiagnostics: RoutingDiagnostic[] = [];
 
 // ─── Keyword-матчер (fallback без ONNX) ──────────────────────────────────────
 
@@ -113,10 +126,16 @@ export async function routeCommand(
     pendingToolArgs?: Record<string, unknown>;
   } = {}
 ): Promise<CommandResult> {
-  const threshold = opts.confidenceThreshold ?? 0.82;
+  const threshold = opts.confidenceThreshold ?? 0.70;
 
   // Сохраняем сообщение пользователя в историю
   sessionHistory.addUser(text);
+
+  const diag: RoutingDiagnostic = {
+    input: text,
+    timestamp: new Date().toLocaleTimeString(),
+    chosenTier: 'llm',
+  };
 
   // ─── 0. Выполнение ожидающего подтверждения ──────────────────────────────
   if (opts.pendingToolName && opts.userConfirmedDestructive) {
@@ -131,9 +150,14 @@ export async function routeCommand(
     return { response, toolResults: [result], matchedVia: 'direct' };
   }
 
-  // ─── 1. ПРЯМОЙ МАТЧИНГ — мгновенно, без LLM ────────────────────────────
+  // ─── 1. ПРЯМОЙ МАТЧИНГ (Regex) — мгновенно, без LLM ────────────────────
   const direct = directMatch(text);
+  diag.direct = { matched: !!direct, toolName: direct?.toolName };
   if (direct) {
+    diag.chosenTier = 'direct';
+    routingDiagnostics.unshift(diag);
+    if (routingDiagnostics.length > 50) routingDiagnostics.pop();
+
     let toolResult: ToolResult = { success: true, message: direct.displayText };
     if (direct.toolName !== 'system_info_echo') {
       toolResult = await executeTool({
@@ -156,44 +180,108 @@ export async function routeCommand(
     };
   }
 
-  // ─── 2. ONNX embedding матч ─────────────────────────────────────────────
-  let matchType: 'embedding' | 'keyword' = 'embedding';
-  let embeddingMatch = await onnxMatch(text, threshold);
+  const allSkills = skillRegistry.getBuiltinSkills();
 
-  // ─── 3. Keyword matching (fallback без ONNX) ─────────────────────────────
-  if (!embeddingMatch) {
-    const kwMatch = keywordMatch(text);
-    if (kwMatch) {
-      embeddingMatch = kwMatch;
-      matchType = 'keyword';
+  // ─── 2. НЕЧЁТКИЙ МАТЧЕР ВЫСОКОЙ УВЕРЕННОСТИ (Score >= 85) ─────────────
+  const fuzzy = fuzzyMatch(text, allSkills);
+  diag.fuzzy = {
+    matched: !!fuzzy,
+    skillId: fuzzy?.skillId,
+    score: fuzzy?.score ?? 0,
+    phrase: fuzzy?.matchedPhrase,
+  };
+
+  if (fuzzy && fuzzy.score >= 85) {
+    diag.chosenTier = 'fuzzy-high';
+    routingDiagnostics.unshift(diag);
+    if (routingDiagnostics.length > 50) routingDiagnostics.pop();
+
+    const skill = allSkills.find((s) => s.id === fuzzy.skillId);
+    if (skill) {
+      const slots = extractSlotsForSkill(text, skill.slots as any);
+      const result = await executeTool({
+        toolName: 'load_skill',
+        args: { skillId: skill.id, slots },
+        matchedVia: 'keyword',
+        skillName: skill.displayName,
+      });
+      const response = result.message ?? 'Выполнено по нечёткому соответствию.';
+      sessionHistory.addAssistant(response, [skill.id]);
+      return { response, toolResults: [result], matchedVia: 'keyword', skillId: skill.id };
     }
   }
 
-  // ─── 4. Выполняем найденный навык ────────────────────────────────────────
-  if (embeddingMatch) {
+  // ─── 3. СЕМАНТИЧЕСКИЙ МАТЧ (ONNX / FastEmbed, Confidence >= 0.70) ───────
+  const semantic = await onnxMatch(text, threshold);
+  diag.embedding = {
+    matched: !!semantic,
+    skillId: semantic?.skill_id,
+    confidence: semantic?.confidence ?? 0,
+  };
+
+  if (semantic) {
+    diag.chosenTier = 'embedding';
+    routingDiagnostics.unshift(diag);
+    if (routingDiagnostics.length > 50) routingDiagnostics.pop();
+
     const skill =
-      await skillRegistry.loadSkill(embeddingMatch.skill_id) ??
-      skillRegistry.getBuiltinSkills().find((s) => s.id === embeddingMatch!.skill_id) ?? null;
+      await skillRegistry.loadSkill(semantic.skill_id) ??
+      allSkills.find((s) => s.id === semantic.skill_id) ?? null;
 
     if (skill) {
       const result = await executeTool({
         toolName: 'load_skill',
-        args: { skillId: skill.id, slots: embeddingMatch.extracted_slots },
-        matchedVia: matchType,
+        args: { skillId: skill.id, slots: semantic.extracted_slots },
+        matchedVia: 'embedding',
         skillName: skill.displayName,
       });
-
       const response = result.message ?? 'Навык выполнен, сэр.';
       sessionHistory.addAssistant(response, [skill.id]);
-
-      return {
-        response,
-        toolResults: [result],
-        matchedVia: matchType,
-        skillId: skill.id,
-      };
+      return { response, toolResults: [result], matchedVia: 'embedding', skillId: skill.id };
     }
   }
+
+  // ─── 4. НЕЧЁТКИЙ МАТЧЕР СРЕДНЕЙ УВЕРЕННОСТИ (Score >= 70) ─────────────
+  if (fuzzy && fuzzy.score >= 70) {
+    diag.chosenTier = 'fuzzy-med';
+    routingDiagnostics.unshift(diag);
+    if (routingDiagnostics.length > 50) routingDiagnostics.pop();
+
+    const skill = allSkills.find((s) => s.id === fuzzy.skillId);
+    if (skill) {
+      const slots = extractSlotsForSkill(text, skill.slots as any);
+      const result = await executeTool({
+        toolName: 'load_skill',
+        args: { skillId: skill.id, slots },
+        matchedVia: 'keyword',
+        skillName: skill.displayName,
+      });
+      const response = result.message ?? 'Выполнено, сэр.';
+      sessionHistory.addAssistant(response, [skill.id]);
+      return { response, toolResults: [result], matchedVia: 'keyword', skillId: skill.id };
+    }
+  }
+
+  // ─── 5. Keyword fallback ────────────────────────────────────────────────
+  const kw = keywordMatch(text);
+  if (kw) {
+    const skill = allSkills.find((s) => s.id === kw.skill_id);
+    if (skill) {
+      const result = await executeTool({
+        toolName: 'load_skill',
+        args: { skillId: skill.id, slots: kw.extracted_slots },
+        matchedVia: 'keyword',
+        skillName: skill.displayName,
+      });
+      const response = result.message ?? 'Выполнено по ключевым словам.';
+      sessionHistory.addAssistant(response, [skill.id]);
+      return { response, toolResults: [result], matchedVia: 'keyword', skillId: skill.id };
+    }
+  }
+
+  diag.chosenTier = 'llm';
+  routingDiagnostics.unshift(diag);
+  if (routingDiagnostics.length > 50) routingDiagnostics.pop();
 
   // ─── 5. LLM fallback ───────────────────────────────────────────────────
   const orchestrator = getOrchestrator();
